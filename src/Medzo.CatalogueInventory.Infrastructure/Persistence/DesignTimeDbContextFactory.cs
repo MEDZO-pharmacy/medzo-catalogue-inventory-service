@@ -1,0 +1,3 @@
+using Microsoft.EntityFrameworkCore;using Microsoft.EntityFrameworkCore.Design;
+namespace Medzo.CatalogueInventory.Infrastructure.Persistence;
+public sealed class DesignTimeDbContextFactory:IDesignTimeDbContextFactory<CatalogueInventoryDbContext>{public CatalogueInventoryDbContext CreateDbContext(string[] args){var connection=Environment.GetEnvironmentVariable("ConnectionStrings__CatalogueInventory")??"Server=localhost;Port=3306;Database=medzo_catalogue_inventory;User=medzo;Password=design_time_only";var options=new DbContextOptionsBuilder<CatalogueInventoryDbContext>().UseMySQL(connection).Options;return new(options);}}

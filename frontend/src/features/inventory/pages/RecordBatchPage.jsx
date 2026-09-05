@@ -1,0 +1,9 @@
+import { useEffect, useState } from 'react'
+import StockBatchForm from '../components/StockBatchForm'; import StockBatchTable from '../components/StockBatchTable'
+import { searchMedicines } from '../../catalogue/api/catalogueApi'; import { getBatches, recordBatch } from '../api/inventoryApi'
+export default function RecordBatchPage() {
+  const [medicines, setMedicines] = useState([]); const [batches, setBatches] = useState([]); const [error, setError] = useState(''); const [success, setSuccess] = useState(''); const [busy, setBusy] = useState(false)
+  useEffect(() => { Promise.all([searchMedicines({ pageSize: 100 }), getBatches({ pageSize: 20 })]).then(([m, b]) => { setMedicines(m.items); setBatches(b.items) }).catch(e => setError(e.message)) }, [])
+  const save = async values => { setBusy(true); setError(''); setSuccess(''); try { const created = await recordBatch(values); setBatches(x => [created, ...x.filter(b => b.id !== created.id)]); setSuccess(`Batch ${created.batchNumber} recorded. Stock is now ${created.quantityOnHand}.`); return true } catch (e) { setError(e.message); return false } finally { setBusy(false) } }
+  return <main className="min-h-screen bg-[#f4f8ff] px-6 py-10"><div className="mx-auto max-w-5xl"><h1 className="text-3xl font-bold text-[#0a192f]">Record stock batch</h1><p className="mb-6 mt-2 text-[#4a5568]">Record source details, quantity, and expiry so every unit remains traceable.</p>{error && <p role="alert" className="mb-4 rounded-lg border border-red-200 bg-red-50 p-4 text-red-700">{error}</p>}{success && <p role="status" className="mb-4 rounded-lg bg-green-50 p-4 text-green-700">{success}</p>}<StockBatchForm medicines={medicines} onSubmit={save} busy={busy} /><h2 className="mb-4 mt-10 text-xl font-bold text-[#0a192f]">Recently recorded batches</h2><StockBatchTable batches={batches} /></div></main>
+}

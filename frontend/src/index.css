@@ -1,0 +1,20 @@
+@import "tailwindcss";
+@source "./**/*.jsx";
+
+@theme {
+  --color-medzo-blue: #0066cc;
+  --color-medzo-green: #00a399;
+  --color-medzo-light-bg: #f4f8ff;
+  --color-medzo-text: #1a202c;
+  --color-medzo-text-light: #4a5568;
+}
+
+body {
+  font-family: 'Inter', system-ui, Avenir, Helvetica, Arial, sans-serif;
+  color: var(--color-medzo-text);
+  background-color: #ffffff;
+}
+
+.gradient-btn {
+  background: linear-gradient(90deg, var(--color-medzo-green) 0%, var(--color-medzo-blue) 100%);
+}
