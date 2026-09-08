@@ -19,6 +19,7 @@ import EditMedicinePage from './features/catalogue/pages/EditMedicinePage'
 import InventoryDashboardPage from './features/inventory/pages/InventoryDashboardPage'
 import RecordBatchPage from './features/inventory/pages/RecordBatchPage'
 import LowStockPage from './features/inventory/pages/LowStockPage'
+import PurchaseReceiptsPage from './features/inventory/pages/PurchaseReceiptsPage'
 import './index.css'
 
 const MainLayout = () => {
@@ -57,6 +58,7 @@ function App() {
               <Route path="/catalogue/:medicineId/edit" element={<EditMedicinePage />} />
               <Route path="/inventory/batches/new" element={<RecordBatchPage />} />
               <Route path="/inventory/low-stock" element={<LowStockPage />} />
+              <Route path="/inventory/purchase-receipts" element={<PurchaseReceiptsPage />} />
             </Route>
             <Route element={<ProtectedRoute roles={['Admin']} />}>
               <Route path="/admin" element={<AdminDashboard />} />

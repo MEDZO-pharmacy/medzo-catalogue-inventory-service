@@ -69,22 +69,45 @@ public sealed class InventoryService(ICatalogueInventoryStore store) : IInventor
         return new(rows.Select(x => new MovementResponse(x.Id, x.Type.ToString(), x.QuantityDelta, x.QuantityBefore, x.QuantityAfter, x.SourceType, x.SourceId, null, x.OccurredAtUtc)).ToList(), page, size, total);
     }
 
+    public async Task<PagedResult<PurchaseStockReceiptResponse>> GetPurchaseReceiptsAsync(int page, int size, CancellationToken ct)
+    {
+        (page, size) = Page(page, size);
+        var query = store.StockMovements.AsNoTracking()
+            .Where(movement => movement.Type == StockMovementType.PurchaseReceived)
+            .Join(store.InventoryItems, movement => movement.InventoryItemId, item => item.Id, (movement, item) => new { movement, item })
+            .Join(store.Medicines, row => row.item.MedicineId, medicine => medicine.Id, (row, medicine) => new { row.movement, row.item, medicine })
+            .Join(store.StockBatches, row => row.movement.StockBatchId, batch => batch.Id, (row, batch) => new { row.movement, row.item, row.medicine, batch });
+        var total = await query.CountAsync(ct);
+        var rows = await query.OrderByDescending(x => x.movement.OccurredAtUtc).Skip((page - 1) * size).Take(size).ToListAsync(ct);
+        return new(rows.Select(x => new PurchaseStockReceiptResponse(x.movement.Id, x.item.MedicineId, x.medicine.Name, x.batch.BatchNumber, x.batch.ExpiryDate, x.movement.QuantityDelta, x.movement.QuantityBefore, x.movement.QuantityAfter, x.movement.SourceId, x.movement.OccurredAtUtc)).ToList(), page, size, total);
+    }
+
     public Task<bool> ApplyPurchaseAsync(ExternalStockEvent message, CancellationToken ct) => Apply(message, "purchasing.purchase-recorded.v1", true, ct);
     public Task<bool> ApplySaleAsync(ExternalStockEvent message, CancellationToken ct) => Apply(message, "sales.sale-completed.v1", false, ct);
 
     private Task<bool> Apply(ExternalStockEvent message, string topic, bool increase, CancellationToken ct) => store.ExecuteTransactionAsync(async token =>
     {
+        ValidateExternalEvent(message, increase);
         if (!await store.TryBeginEventAsync(message.EventId, topic, token)) return false;
         foreach (var line in message.Lines)
         {
-            if (line.Quantity <= 0) throw Invalid("quantity", "Quantity must be positive.");
             var item = await store.InventoryItems.Include(x => x.Batches).SingleOrDefaultAsync(x => x.MedicineId == line.MedicineId, token) ?? throw new NotFoundException($"Inventory for medicine {line.MedicineId} was not found.");
             var wasLow = item.IsLowStock;
             if (increase)
             {
-                if (string.IsNullOrWhiteSpace(line.BatchNumber) || line.ExpiryDate is null) throw Invalid("batch", "Purchases require batch number and expiry date.");
-                var batch = item.Batches.SingleOrDefault(x => x.BatchNumber == line.BatchNumber);
-                if (batch is null) { batch = new StockBatch(item.Id, line.BatchNumber, line.Description ?? $"Purchase {message.SourceId}", line.ExpiryDate.Value, line.Quantity); await store.AddBatchAsync(batch, token); }
+                var batchNumber = line.BatchNumber!.Trim();
+                var normalizedBatch = batchNumber.ToUpperInvariant();
+                var batch = item.Batches.SingleOrDefault(x => x.BatchNumber.ToUpper() == normalizedBatch);
+                if (batch is null)
+                {
+                    batch = new StockBatch(item.Id, batchNumber, line.Description ?? $"Purchase {message.SourceId}", line.ExpiryDate!.Value, line.Quantity);
+                    await store.AddBatchAsync(batch, token);
+                }
+                else
+                {
+                    if (batch.ExpiryDate != line.ExpiryDate) throw new ConflictException($"Batch {batchNumber} has a different expiry date. The purchase was not applied.");
+                    batch.Receive(line.Quantity);
+                }
                 item.ChangeStock(line.Quantity, StockMovementType.PurchaseReceived, "Purchase", message.SourceId, batch.Id);
             }
             else
@@ -98,6 +121,30 @@ public sealed class InventoryService(ICatalogueInventoryStore store) : IInventor
         }
         await store.SaveChangesAsync(token); return true;
     }, ct);
+
+    private static void ValidateExternalEvent(ExternalStockEvent message, bool purchase)
+    {
+        var errors = new Dictionary<string, string[]>();
+        if (message.EventId == Guid.Empty) errors["eventId"] = ["Event ID is required."];
+        if (string.IsNullOrWhiteSpace(message.SourceId)) errors["sourceId"] = ["Source reference is required."];
+        if (message.Lines is null || message.Lines.Count == 0) errors["lines"] = ["At least one stock line is required."];
+        else
+        {
+            for (var index = 0; index < message.Lines.Count; index++)
+            {
+                var line = message.Lines[index];
+                var prefix = $"lines[{index}]";
+                if (line.MedicineId == Guid.Empty) errors[$"{prefix}.medicineId"] = ["Medicine is required."];
+                if (line.Quantity <= 0) errors[$"{prefix}.quantity"] = ["Quantity must be greater than zero."];
+                if (!purchase) continue;
+                if (string.IsNullOrWhiteSpace(line.BatchNumber)) errors[$"{prefix}.batchNumber"] = ["Batch number is required for a purchase."];
+                else if (line.BatchNumber.Trim().Length > StockBatch.MaxBatchNumberLength) errors[$"{prefix}.batchNumber"] = [$"Batch number cannot exceed {StockBatch.MaxBatchNumberLength} characters."];
+                if (line.ExpiryDate is null || line.ExpiryDate <= DateOnly.FromDateTime(DateTime.UtcNow)) errors[$"{prefix}.expiryDate"] = ["A future expiry date is required for a purchase."];
+                if ((line.Description?.Trim().Length ?? 0) > StockBatch.MaxDescriptionLength) errors[$"{prefix}.description"] = [$"Description cannot exceed {StockBatch.MaxDescriptionLength} characters."];
+            }
+        }
+        if (errors.Count > 0) throw new ValidationException(errors);
+    }
 
     private static void ValidateBatch(RecordBatchRequest r)
     {

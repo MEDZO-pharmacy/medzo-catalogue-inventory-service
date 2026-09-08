@@ -8,7 +8,7 @@ public sealed class StockBatch : Entity
     public const int MaxDescriptionLength = 500;
     private StockBatch() { }
 
-    public StockBatch(Guid inventoryItemId, string batchNumber, string description, DateOnly expiryDate, int initialQuantity)
+    public StockBatch(Guid inventoryItemId, string batchNumber, string? description, DateOnly expiryDate, int initialQuantity)
     {
         if (inventoryItemId == Guid.Empty) throw new ArgumentException("Inventory item is required.", nameof(inventoryItemId));
         if (string.IsNullOrWhiteSpace(batchNumber)) throw new ArgumentException("Batch number is required.", nameof(batchNumber));
@@ -27,5 +27,11 @@ public sealed class StockBatch : Entity
     public int InitialQuantity { get; private set; }
     public int RemainingQuantity { get; private set; }
     public DateTime ReceivedAtUtc { get; private set; }
+    public void Receive(int quantity)
+    {
+        if (quantity <= 0) throw new ArgumentOutOfRangeException(nameof(quantity), "Quantity must be greater than zero.");
+        InitialQuantity = checked(InitialQuantity + quantity);
+        RemainingQuantity = checked(RemainingQuantity + quantity);
+    }
     public void Consume(int quantity) { if (quantity <= 0 || quantity > RemainingQuantity) throw new InvalidOperationException("Invalid batch quantity."); RemainingQuantity -= quantity; }
 }
