@@ -12,6 +12,7 @@ public sealed class StockBatchTests
     {
         var batch = new StockBatch(Guid.NewGuid(), " LOT-001 ", " Supplier delivery INV-100 ", FutureDate, 25);
         Assert.Equal("LOT-001", batch.BatchNumber);
+        Assert.Equal("LOT-001", batch.NormalizedBatchNumber);
         Assert.Equal("Supplier delivery INV-100", batch.Description);
         Assert.Equal(FutureDate, batch.ExpiryDate);
         Assert.Equal(25, batch.InitialQuantity);

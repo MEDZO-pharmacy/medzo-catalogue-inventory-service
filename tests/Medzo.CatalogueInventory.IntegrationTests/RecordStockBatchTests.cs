@@ -38,6 +38,20 @@ public sealed class RecordStockBatchTests
         Assert.Single(await fixture.Db.MovementSet.ToListAsync());
     }
 
+    [Fact]
+    public async Task RecordBatch_WhenSourceReferenceIsTooLong_DoesNotWriteAnyData()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var request = new RecordBatchRequest(fixture.MedicineId, "LOT-TOO-LONG", null, DateOnly.FromDateTime(DateTime.UtcNow.AddMonths(6)), 20, new string('x', 151));
+
+        var error = await Assert.ThrowsAsync<ValidationException>(() => fixture.Service.RecordBatchAsync(request, TestContext.Current.CancellationToken));
+
+        Assert.Contains("sourceReference", error.Errors.Keys);
+        Assert.Equal(0, (await fixture.Db.InventoryItemSet.SingleAsync(TestContext.Current.CancellationToken)).QuantityOnHand);
+        Assert.Empty(await fixture.Db.StockBatches.ToListAsync(TestContext.Current.CancellationToken));
+        Assert.Empty(await fixture.Db.MovementSet.ToListAsync(TestContext.Current.CancellationToken));
+    }
+
     private sealed class Fixture : IAsyncDisposable
     {
         private readonly SqliteConnection connection;

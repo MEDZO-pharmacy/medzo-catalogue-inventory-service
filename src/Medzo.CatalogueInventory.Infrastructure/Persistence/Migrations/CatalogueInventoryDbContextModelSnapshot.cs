@@ -3,6 +3,7 @@ using System;
 using Medzo.CatalogueInventory.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -17,17 +18,19 @@ namespace Medzo.CatalogueInventory.Infrastructure.Persistence.Migrations
 #pragma warning disable 612, 618
             modelBuilder
                 .HasAnnotation("ProductVersion", "10.0.1")
-                .HasAnnotation("Relational:MaxIdentifierLength", 64);
+                .HasAnnotation("Relational:MaxIdentifierLength", 128);
+
+            SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
 
             modelBuilder.Entity("Medzo.CatalogueInventory.Domain.Catalogue.Category", b =>
                 {
                     b.Property<Guid>("Id")
-                        .HasColumnType("char(36)");
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(100)
-                        .HasColumnType("varchar(100)");
+                        .HasColumnType("nvarchar(100)");
 
                     b.HasKey("Id");
 
@@ -40,10 +43,10 @@ namespace Medzo.CatalogueInventory.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("Medzo.CatalogueInventory.Domain.Catalogue.Medicine", b =>
                 {
                     b.Property<Guid>("Id")
-                        .HasColumnType("char(36)");
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<Guid?>("CategoryId")
-                        .HasColumnType("char(36)");
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<int>("DosageForm")
                         .HasColumnType("int");
@@ -51,25 +54,25 @@ namespace Medzo.CatalogueInventory.Infrastructure.Persistence.Migrations
                     b.Property<string>("GenericName")
                         .IsRequired()
                         .HasMaxLength(200)
-                        .HasColumnType("varchar(200)");
+                        .HasColumnType("nvarchar(200)");
 
                     b.Property<bool>("IsActive")
-                        .HasColumnType("tinyint(1)");
+                        .HasColumnType("bit");
 
                     b.Property<string>("Manufacturer")
                         .IsRequired()
                         .HasMaxLength(200)
-                        .HasColumnType("varchar(200)");
+                        .HasColumnType("nvarchar(200)");
 
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(200)
-                        .HasColumnType("varchar(200)");
+                        .HasColumnType("nvarchar(200)");
 
                     b.Property<string>("NormalizedName")
                         .IsRequired()
                         .HasMaxLength(200)
-                        .HasColumnType("varchar(200)");
+                        .HasColumnType("nvarchar(200)");
 
                     b.Property<decimal>("UnitPrice")
                         .HasPrecision(12, 2)
@@ -88,10 +91,10 @@ namespace Medzo.CatalogueInventory.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("Medzo.CatalogueInventory.Domain.Inventory.InventoryItem", b =>
                 {
                     b.Property<Guid>("Id")
-                        .HasColumnType("char(36)");
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<Guid>("MedicineId")
-                        .HasColumnType("char(36)");
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<int>("QuantityOnHand")
                         .HasColumnType("int");
@@ -113,16 +116,16 @@ namespace Medzo.CatalogueInventory.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("Medzo.CatalogueInventory.Domain.Inventory.StockBatch", b =>
                 {
                     b.Property<Guid>("Id")
-                        .HasColumnType("char(36)");
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<string>("BatchNumber")
                         .IsRequired()
                         .HasMaxLength(100)
-                        .HasColumnType("varchar(100)");
+                        .HasColumnType("nvarchar(100)");
 
                     b.Property<string>("Description")
                         .HasMaxLength(500)
-                        .HasColumnType("varchar(500)");
+                        .HasColumnType("nvarchar(500)");
 
                     b.Property<DateOnly>("ExpiryDate")
                         .HasColumnType("date");
@@ -131,10 +134,15 @@ namespace Medzo.CatalogueInventory.Infrastructure.Persistence.Migrations
                         .HasColumnType("int");
 
                     b.Property<Guid>("InventoryItemId")
-                        .HasColumnType("char(36)");
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("NormalizedBatchNumber")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
 
                     b.Property<DateTime>("ReceivedAtUtc")
-                        .HasColumnType("datetime(6)");
+                        .HasColumnType("datetime2");
 
                     b.Property<int>("RemainingQuantity")
                         .HasColumnType("int");
@@ -143,7 +151,7 @@ namespace Medzo.CatalogueInventory.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("ExpiryDate");
 
-                    b.HasIndex("InventoryItemId", "BatchNumber")
+                    b.HasIndex("InventoryItemId", "NormalizedBatchNumber")
                         .IsUnique();
 
                     b.ToTable("stock_batches", (string)null);
@@ -152,13 +160,13 @@ namespace Medzo.CatalogueInventory.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("Medzo.CatalogueInventory.Domain.Inventory.StockMovement", b =>
                 {
                     b.Property<Guid>("Id")
-                        .HasColumnType("char(36)");
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<Guid>("InventoryItemId")
-                        .HasColumnType("char(36)");
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<DateTime>("OccurredAtUtc")
-                        .HasColumnType("datetime(6)");
+                        .HasColumnType("datetime2");
 
                     b.Property<int>("QuantityAfter")
                         .HasColumnType("int");
@@ -172,15 +180,15 @@ namespace Medzo.CatalogueInventory.Infrastructure.Persistence.Migrations
                     b.Property<string>("SourceId")
                         .IsRequired()
                         .HasMaxLength(150)
-                        .HasColumnType("varchar(150)");
+                        .HasColumnType("nvarchar(150)");
 
                     b.Property<string>("SourceType")
                         .IsRequired()
                         .HasMaxLength(50)
-                        .HasColumnType("varchar(50)");
+                        .HasColumnType("nvarchar(50)");
 
                     b.Property<Guid?>("StockBatchId")
-                        .HasColumnType("char(36)");
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<int>("Type")
                         .HasColumnType("int");
@@ -195,7 +203,7 @@ namespace Medzo.CatalogueInventory.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("Medzo.CatalogueInventory.Domain.Messaging.OutboxMessage", b =>
                 {
                     b.Property<Guid>("Id")
-                        .HasColumnType("char(36)");
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<int>("Attempts")
                         .HasColumnType("int");
@@ -203,30 +211,30 @@ namespace Medzo.CatalogueInventory.Infrastructure.Persistence.Migrations
                     b.Property<string>("Key")
                         .IsRequired()
                         .HasMaxLength(100)
-                        .HasColumnType("varchar(100)");
+                        .HasColumnType("nvarchar(100)");
 
                     b.Property<string>("LastError")
-                        .HasColumnType("longtext");
+                        .HasColumnType("nvarchar(max)");
 
                     b.Property<DateTime>("OccurredAtUtc")
-                        .HasColumnType("datetime(6)");
+                        .HasColumnType("datetime2");
 
                     b.Property<string>("Payload")
                         .IsRequired()
-                        .HasColumnType("longtext");
+                        .HasColumnType("nvarchar(max)");
 
                     b.Property<DateTime?>("ProcessedAtUtc")
-                        .HasColumnType("datetime(6)");
+                        .HasColumnType("datetime2");
 
                     b.Property<string>("Topic")
                         .IsRequired()
                         .HasMaxLength(200)
-                        .HasColumnType("varchar(200)");
+                        .HasColumnType("nvarchar(200)");
 
                     b.Property<string>("Type")
                         .IsRequired()
                         .HasMaxLength(200)
-                        .HasColumnType("varchar(200)");
+                        .HasColumnType("nvarchar(200)");
 
                     b.HasKey("Id");
 
@@ -238,18 +246,18 @@ namespace Medzo.CatalogueInventory.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("Medzo.CatalogueInventory.Domain.Messaging.ProcessedEvent", b =>
                 {
                     b.Property<Guid>("Id")
-                        .HasColumnType("char(36)");
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<Guid>("EventId")
-                        .HasColumnType("char(36)");
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<DateTime>("ProcessedAtUtc")
-                        .HasColumnType("datetime(6)");
+                        .HasColumnType("datetime2");
 
                     b.Property<string>("Topic")
                         .IsRequired()
                         .HasMaxLength(200)
-                        .HasColumnType("varchar(200)");
+                        .HasColumnType("nvarchar(200)");
 
                     b.HasKey("Id");
 

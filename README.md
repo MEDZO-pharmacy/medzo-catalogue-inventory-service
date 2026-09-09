@@ -1,6 +1,6 @@
 # Medzo Catalogue and Inventory Service
 
-.NET 10 Clean Architecture service containing Catalogue and Inventory as internal modules. It uses one MySQL database, validates JWTs issued by Medzo Auth, consumes purchasing/sales events idempotently, and publishes inventory events through a transactional outbox.
+.NET 10 Clean Architecture service containing Catalogue and Inventory as internal modules. It uses the `medzo_inventory_db` Azure SQL database, validates JWTs issued by Medzo Auth, consumes purchasing/sales events idempotently, and publishes inventory events through a transactional outbox.
 
 ## Run
 
@@ -8,7 +8,7 @@ Copy `.env.example` values into your local secret/configuration provider, then r
 
 ```powershell
 dotnet restore
-dotnet ef database update --project src/Medzo.CatalogueInventory.Infrastructure --startup-project src/Medzo.CatalogueInventory.Api
+dotnet tool run dotnet-ef -- database update --project src/Medzo.CatalogueInventory.Infrastructure --startup-project src/Medzo.CatalogueInventory.Api
 dotnet run --project src/Medzo.CatalogueInventory.Api
 ```
 

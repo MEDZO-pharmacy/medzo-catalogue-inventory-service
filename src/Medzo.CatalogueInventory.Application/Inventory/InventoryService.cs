@@ -39,25 +39,38 @@ public sealed class InventoryService(ICatalogueInventoryStore store) : IInventor
         return MapBatch(row.b, row.i, row.m.Name);
     }
 
-    public Task<BatchResponse> RecordBatchAsync(RecordBatchRequest request, CancellationToken ct) =>
-        store.ExecuteTransactionAsync<BatchResponse>(async token =>
+    public async Task<BatchResponse> RecordBatchAsync(RecordBatchRequest request, CancellationToken ct)
+    {
+        ValidateBatch(request);
+        var normalizedBatch = request.BatchNumber.Trim();
+        var normalizedKey = normalizedBatch.ToUpperInvariant();
+        try
         {
-            ValidateBatch(request);
-            var item = await store.InventoryItems.Include(x => x.Batches).SingleOrDefaultAsync(x => x.MedicineId == request.MedicineId, token)
-                ?? throw new NotFoundException("Inventory item was not found.");
-            var medicineName = await store.Medicines.Where(x => x.Id == request.MedicineId).Select(x => x.Name).SingleAsync(token);
-            var normalizedBatch = request.BatchNumber.Trim();
-            var normalizedKey = normalizedBatch.ToUpperInvariant();
-            if (item.Batches.Any(x => x.BatchNumber.ToUpper() == normalizedKey)) throw new ConflictException("This batch number already exists for the selected medicine. Stock was not changed.");
+            return await store.ExecuteTransactionAsync<BatchResponse>(async token =>
+            {
+                var item = await store.InventoryItems.Include(x => x.Batches).SingleOrDefaultAsync(x => x.MedicineId == request.MedicineId, token)
+                    ?? throw new NotFoundException("Inventory item was not found.");
+                var medicineName = await store.Medicines.Where(x => x.Id == request.MedicineId).Select(x => x.Name).SingleAsync(token);
+                if (item.Batches.Any(x => x.NormalizedBatchNumber == normalizedKey)) throw DuplicateBatch();
 
-            var wasLow = item.IsLowStock;
-            var batch = new StockBatch(item.Id, normalizedBatch, request.Description, request.ExpiryDate, request.Quantity);
-            await store.AddBatchAsync(batch, token);
-            item.ChangeStock(request.Quantity, StockMovementType.BatchReceived, "ManualBatch", request.SourceReference?.Trim() ?? batch.Id.ToString(), batch.Id);
-            QueueTransitions(item, wasLow, "ManualBatch", batch.Id.ToString());
-            await store.SaveChangesAsync(token);
-            return MapBatch(batch, item, medicineName);
-        }, ct);
+                var wasLow = item.IsLowStock;
+                var batch = new StockBatch(item.Id, normalizedBatch, request.Description, request.ExpiryDate, request.Quantity);
+                await store.AddBatchAsync(batch, token);
+                item.ChangeStock(request.Quantity, StockMovementType.BatchReceived, "ManualBatch", request.SourceReference?.Trim() ?? batch.Id.ToString(), batch.Id);
+                QueueTransitions(item, wasLow, "ManualBatch", batch.Id.ToString());
+                await store.SaveChangesAsync(token);
+                return MapBatch(batch, item, medicineName);
+            }, ct);
+        }
+        catch (DbUpdateException)
+        {
+            var duplicateExists = await store.StockBatches
+                .Join(store.InventoryItems, batch => batch.InventoryItemId, item => item.Id, (batch, item) => new { batch, item })
+                .AnyAsync(x => x.item.MedicineId == request.MedicineId && x.batch.NormalizedBatchNumber == normalizedKey, ct);
+            if (duplicateExists) throw DuplicateBatch();
+            throw;
+        }
+    }
 
     public async Task<PagedResult<MovementResponse>> GetMovementsAsync(Guid medicineId, int page, int size, CancellationToken ct)
     {
@@ -97,7 +110,7 @@ public sealed class InventoryService(ICatalogueInventoryStore store) : IInventor
             {
                 var batchNumber = line.BatchNumber!.Trim();
                 var normalizedBatch = batchNumber.ToUpperInvariant();
-                var batch = item.Batches.SingleOrDefault(x => x.BatchNumber.ToUpper() == normalizedBatch);
+                var batch = item.Batches.SingleOrDefault(x => x.NormalizedBatchNumber == normalizedBatch);
                 if (batch is null)
                 {
                     batch = new StockBatch(item.Id, batchNumber, line.Description ?? $"Purchase {message.SourceId}", line.ExpiryDate!.Value, line.Quantity);
@@ -127,6 +140,7 @@ public sealed class InventoryService(ICatalogueInventoryStore store) : IInventor
         var errors = new Dictionary<string, string[]>();
         if (message.EventId == Guid.Empty) errors["eventId"] = ["Event ID is required."];
         if (string.IsNullOrWhiteSpace(message.SourceId)) errors["sourceId"] = ["Source reference is required."];
+        else if (message.SourceId.Trim().Length > StockMovement.MaxSourceIdLength) errors["sourceId"] = [$"Source reference cannot exceed {StockMovement.MaxSourceIdLength} characters."];
         if (message.Lines is null || message.Lines.Count == 0) errors["lines"] = ["At least one stock line is required."];
         else
         {
@@ -153,6 +167,7 @@ public sealed class InventoryService(ICatalogueInventoryStore store) : IInventor
         if (string.IsNullOrWhiteSpace(r.BatchNumber)) errors["batchNumber"] = ["Batch number is required."];
         else if (r.BatchNumber.Trim().Length > StockBatch.MaxBatchNumberLength) errors["batchNumber"] = [$"Batch number cannot exceed {StockBatch.MaxBatchNumberLength} characters."];
         if ((r.Description?.Trim().Length ?? 0) > StockBatch.MaxDescriptionLength) errors["description"] = [$"Description cannot exceed {StockBatch.MaxDescriptionLength} characters."];
+        if ((r.SourceReference?.Trim().Length ?? 0) > StockMovement.MaxSourceIdLength) errors["sourceReference"] = [$"Source reference cannot exceed {StockMovement.MaxSourceIdLength} characters."];
         if (r.Quantity <= 0) errors["quantity"] = ["Quantity must be greater than zero."];
         if (r.ExpiryDate <= DateOnly.FromDateTime(DateTime.UtcNow)) errors["expiryDate"] = ["Expiry date must be in the future."];
         if (errors.Count > 0) throw new ValidationException(errors);
@@ -168,5 +183,6 @@ public sealed class InventoryService(ICatalogueInventoryStore store) : IInventor
     private static BatchResponse MapBatch(StockBatch b, InventoryItem i, string name) => new(b.Id, i.MedicineId, name, b.BatchNumber, b.Description, b.ExpiryDate, b.InitialQuantity, b.RemainingQuantity, b.ReceivedAtUtc, i.QuantityOnHand, i.IsLowStock);
     private static InventoryResponse MapInventory(InventoryItem i, string n, string g) => new(i.MedicineId, n, g, i.QuantityOnHand, i.ReorderThreshold, i.IsLowStock, i.Batches.Where(b => b.RemainingQuantity > 0).Select(b => (DateOnly?)b.ExpiryDate).OrderBy(x => x).FirstOrDefault(), i.Version);
     private static (int, int) Page(int page, int size) => (Math.Max(page, 1), Math.Clamp(size, 1, 100));
+    private static ConflictException DuplicateBatch() => new("This batch number already exists for the selected medicine. Stock was not changed.");
     private static ValidationException Invalid(string field, string message) => new(new Dictionary<string, string[]> { { field, [message] } });
 }

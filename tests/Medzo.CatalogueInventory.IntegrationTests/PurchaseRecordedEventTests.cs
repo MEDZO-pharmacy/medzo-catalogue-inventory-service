@@ -79,6 +79,24 @@ public sealed class PurchaseRecordedEventTests
         Assert.Equal(2, await fixture.Db.MovementSet.CountAsync(TestContext.Current.CancellationToken));
     }
 
+    [Fact]
+    public async Task ApplyPurchase_WithInvalidReference_ReturnsValidationAndChangesNothing()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var message = fixture.Purchase(new string('P', StockMovement.MaxSourceIdLength + 1),
+            new ExternalStockLine(fixture.MedicineId, 10, "LOT-INVALID", null, FutureExpiry()));
+
+        var error = await Assert.ThrowsAsync<ValidationException>(() =>
+            fixture.Service.ApplyPurchaseAsync(message, TestContext.Current.CancellationToken));
+
+        Assert.Contains("sourceId", error.Errors.Keys);
+        Assert.Equal(0, (await fixture.Db.InventoryItemSet.AsNoTracking().SingleAsync(TestContext.Current.CancellationToken)).QuantityOnHand);
+        Assert.Empty(await fixture.Db.StockBatches.AsNoTracking().ToListAsync(TestContext.Current.CancellationToken));
+        Assert.Empty(await fixture.Db.MovementSet.AsNoTracking().ToListAsync(TestContext.Current.CancellationToken));
+        Assert.Empty(await fixture.Db.ProcessedEvents.AsNoTracking().ToListAsync(TestContext.Current.CancellationToken));
+        Assert.Empty(await fixture.Db.OutboxMessages.AsNoTracking().ToListAsync(TestContext.Current.CancellationToken));
+    }
+
     private static DateOnly FutureExpiry() => DateOnly.FromDateTime(DateTime.UtcNow.AddMonths(6));
 
     private sealed class Fixture : IAsyncDisposable

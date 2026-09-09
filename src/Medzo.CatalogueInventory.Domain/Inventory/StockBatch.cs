@@ -16,12 +16,13 @@ public sealed class StockBatch : Entity
         if ((description?.Trim().Length ?? 0) > MaxDescriptionLength) throw new ArgumentException($"Description cannot exceed {MaxDescriptionLength} characters.", nameof(description));
         if (expiryDate <= DateOnly.FromDateTime(DateTime.UtcNow)) throw new ArgumentException("Expiry date must be in the future.", nameof(expiryDate));
         if (initialQuantity <= 0) throw new ArgumentOutOfRangeException(nameof(initialQuantity), "Quantity must be greater than zero.");
-        InventoryItemId = inventoryItemId; BatchNumber = batchNumber.Trim(); Description = string.IsNullOrWhiteSpace(description) ? null : description.Trim(); ExpiryDate = expiryDate;
+        InventoryItemId = inventoryItemId; BatchNumber = batchNumber.Trim(); NormalizedBatchNumber = BatchNumber.ToUpperInvariant(); Description = string.IsNullOrWhiteSpace(description) ? null : description.Trim(); ExpiryDate = expiryDate;
         InitialQuantity = RemainingQuantity = initialQuantity; ReceivedAtUtc = DateTime.UtcNow;
     }
 
     public Guid InventoryItemId { get; private set; }
     public string BatchNumber { get; private set; } = null!;
+    public string NormalizedBatchNumber { get; private set; } = null!;
     public string? Description { get; private set; }
     public DateOnly ExpiryDate { get; private set; }
     public int InitialQuantity { get; private set; }
