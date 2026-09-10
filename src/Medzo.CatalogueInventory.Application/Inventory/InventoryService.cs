@@ -95,6 +95,19 @@ public sealed class InventoryService(ICatalogueInventoryStore store) : IInventor
         return new(rows.Select(x => new PurchaseStockReceiptResponse(x.movement.Id, x.item.MedicineId, x.medicine.Name, x.batch.BatchNumber, x.batch.ExpiryDate, x.movement.QuantityDelta, x.movement.QuantityBefore, x.movement.QuantityAfter, x.movement.SourceId, x.movement.OccurredAtUtc)).ToList(), page, size, total);
     }
 
+    public async Task<PagedResult<SaleStockIssueResponse>> GetSaleIssuesAsync(int page, int size, CancellationToken ct)
+    {
+        (page, size) = Page(page, size);
+        var query = store.StockMovements.AsNoTracking()
+            .Where(movement => movement.Type == StockMovementType.SaleDispensed)
+            .Join(store.InventoryItems, movement => movement.InventoryItemId, item => item.Id, (movement, item) => new { movement, item })
+            .Join(store.Medicines, row => row.item.MedicineId, medicine => medicine.Id, (row, medicine) => new { row.movement, row.item, medicine })
+            .Join(store.StockBatches, row => row.movement.StockBatchId, batch => batch.Id, (row, batch) => new { row.movement, row.item, row.medicine, batch });
+        var total = await query.CountAsync(ct);
+        var rows = await query.OrderByDescending(x => x.movement.OccurredAtUtc).Skip((page - 1) * size).Take(size).ToListAsync(ct);
+        return new(rows.Select(x => new SaleStockIssueResponse(x.movement.Id, x.item.MedicineId, x.medicine.Name, x.batch.BatchNumber, x.batch.ExpiryDate, -x.movement.QuantityDelta, x.movement.QuantityBefore, x.movement.QuantityAfter, x.movement.SourceId, x.movement.OccurredAtUtc)).ToList(), page, size, total);
+    }
+
     public Task<bool> ApplyPurchaseAsync(ExternalStockEvent message, CancellationToken ct) => Apply(message, "purchasing.purchase-recorded.v1", true, ct);
     public Task<bool> ApplySaleAsync(ExternalStockEvent message, CancellationToken ct) => Apply(message, "sales.sale-completed.v1", false, ct);
 
