@@ -1,4 +1,0 @@
-export default function StockBatchTable({ batches }) {
-  if (!batches.length) return <p className="rounded-2xl bg-white p-8 text-center text-[#6b7280]">No stock batches recorded yet.</p>
-  return <div className="overflow-x-auto rounded-2xl bg-white shadow-sm" role="region" aria-label="Recently recorded stock batches" tabIndex="0"><table className="min-w-[760px] w-full text-left"><thead className="bg-slate-50 text-sm text-slate-500"><tr>{['Medicine', 'Batch', 'Description', 'Expiry', 'Received', 'Remaining'].map(x => <th scope="col" key={x} className="p-4">{x}</th>)}</tr></thead><tbody>{batches.map(x => <tr key={x.id} className="border-t border-slate-100"><td className="p-4 font-semibold">{x.medicineName}</td><td className="p-4">{x.batchNumber}</td><td className="max-w-sm p-4">{x.description || '—'}</td><td className="p-4">{x.expiryDate}</td><td className="p-4">{x.initialQuantity}</td><td className="p-4">{x.remainingQuantity}</td></tr>)}</tbody></table></div>
-}

@@ -1,1 +1,0 @@
-export default function StockLevelCard({label,value,tone='blue'}){const tones={blue:'text-medzo-blue',green:'text-medzo-green',red:'text-red-700'};return <article className="rounded-2xl bg-white p-6 shadow-sm"><p className="text-sm font-semibold text-[#4a5568]">{label}</p><p className={`mt-2 text-3xl font-bold ${tones[tone]}`}>{value}</p></article>}
