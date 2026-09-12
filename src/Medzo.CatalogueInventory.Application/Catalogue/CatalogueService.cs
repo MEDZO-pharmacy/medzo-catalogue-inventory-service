@@ -1,10 +1,42 @@
-using Medzo.CatalogueInventory.Application.Common;using Medzo.CatalogueInventory.Domain.Catalogue;using Medzo.CatalogueInventory.Domain.Inventory;using Microsoft.EntityFrameworkCore;
+using Medzo.CatalogueInventory.Application.Common;
+using Medzo.CatalogueInventory.Domain.Catalogue;
+using Medzo.CatalogueInventory.Domain.Inventory;
+using Microsoft.EntityFrameworkCore;
+
 namespace Medzo.CatalogueInventory.Application.Catalogue;
-public sealed class CatalogueService(ICatalogueInventoryStore store):ICatalogueService{
- public async Task<PagedResult<MedicineResponse>> SearchAsync(string? search,int page,int size,CancellationToken ct){(page,size)=Paging(page,size);var q=store.Medicines.AsNoTracking().Include(x=>x.Category).Include(x=>x.InventoryItem).Where(x=>x.IsActive);if(!string.IsNullOrWhiteSpace(search)){var term=search.Trim();q=q.Where(x=>x.Name.Contains(term)||x.GenericName.Contains(term)||x.Manufacturer.Contains(term));}var total=await q.CountAsync(ct);var rows=await q.OrderBy(x=>x.Name).Skip((page-1)*size).Take(size).ToListAsync(ct);return new(rows.Select(Map).ToList(),page,size,total);}
+
+public sealed class CatalogueService(ICatalogueInventoryStore store) : ICatalogueService
+{
+ public async Task<PagedResult<MedicineResponse>> SearchAsync(string? search,int page,int size,CancellationToken ct)
+ {
+  (page,size)=Paging(page,size);
+  var query=store.Medicines
+   .AsNoTracking()
+   .Include(x=>x.Category)
+   .Include(x=>x.InventoryItem)
+   .Where(x=>x.IsActive);
+
+  if(!string.IsNullOrWhiteSpace(search))
+  {
+   var normalizedSearch=search.Trim().ToUpperInvariant();
+   query=query.Where(x=>
+    x.NormalizedName.Contains(normalizedSearch) ||
+    x.GenericName.ToUpper().Contains(normalizedSearch) ||
+    x.Manufacturer.ToUpper().Contains(normalizedSearch));
+  }
+
+  var total=await query.CountAsync(ct);
+  var rows=await query
+   .OrderBy(x=>x.Name)
+   .Skip((page-1)*size)
+   .Take(size)
+   .ToListAsync(ct);
+
+  return new(rows.Select(Map).ToList(),page,size,total);
+ }
  public async Task<MedicineResponse> GetAsync(Guid id,CancellationToken ct)=>Map(await store.Medicines.AsNoTracking().Include(x=>x.Category).Include(x=>x.InventoryItem).SingleOrDefaultAsync(x=>x.Id==id,ct)??throw new NotFoundException("Medicine was not found."));
  public Task<MedicineResponse> CreateAsync(MedicineRequest r,CancellationToken ct)=>store.ExecuteTransactionAsync(async token=>{Validate(r);if(await store.Medicines.AnyAsync(x=>x.NormalizedName==r.Name.Trim().ToUpper(),token))throw new ConflictException("A medicine with this name already exists.");var m=new Medicine(r.Name,r.GenericName,r.Manufacturer,r.UnitPrice,r.DosageForm,r.CategoryId);var i=new InventoryItem(m.Id,r.ReorderThreshold);await store.AddMedicineAsync(m,token);await store.AddInventoryItemAsync(i,token);await store.SaveChangesAsync(token);return Map(m,i);},ct);
  public Task<MedicineResponse> UpdateAsync(Guid id,MedicineRequest r,long version,CancellationToken ct)=>store.ExecuteTransactionAsync(async token=>{Validate(r);var m=await store.Medicines.Include(x=>x.InventoryItem).SingleOrDefaultAsync(x=>x.Id==id,token)??throw new NotFoundException("Medicine was not found.");if(m.InventoryItem!.Version!=version)throw new ConflictException("Medicine stock changed. Reload and try again.");if(await store.Medicines.AnyAsync(x=>x.Id!=id&&x.NormalizedName==r.Name.Trim().ToUpper(),token))throw new ConflictException("A medicine with this name already exists.");m.Update(r.Name,r.GenericName,r.Manufacturer,r.UnitPrice,r.DosageForm,r.CategoryId);m.InventoryItem.SetReorderThreshold(r.ReorderThreshold);await store.SaveChangesAsync(token);return Map(m,m.InventoryItem);},ct);
- private static void Validate(MedicineRequest r){var e=new Dictionary<string,string[]>();if(string.IsNullOrWhiteSpace(r.Name))e["name"]=["Name is required."];if(string.IsNullOrWhiteSpace(r.GenericName))e["genericName"]=["Generic name is required."];if(string.IsNullOrWhiteSpace(r.Manufacturer))e["manufacturer"]=["Manufacturer is required."];if(r.UnitPrice<0)e["unitPrice"]=["Unit price cannot be negative."];if(r.ReorderThreshold<0)e["reorderThreshold"]=["Threshold cannot be negative."];if(e.Count>0)throw new ValidationException(e);}
+ private static void Validate(MedicineRequest r){var e=new Dictionary<string,string[]>();if(string.IsNullOrWhiteSpace(r.Name))e["name"]=["Name is required."];else if(r.Name.Trim().Length>Medicine.MaxNameLength)e["name"]=[ $"Name cannot exceed {Medicine.MaxNameLength} characters." ];if(string.IsNullOrWhiteSpace(r.GenericName))e["genericName"]=["Generic name is required."];else if(r.GenericName.Trim().Length>Medicine.MaxGenericNameLength)e["genericName"]=[ $"Generic name cannot exceed {Medicine.MaxGenericNameLength} characters." ];if(string.IsNullOrWhiteSpace(r.Manufacturer))e["manufacturer"]=["Manufacturer is required."];else if(r.Manufacturer.Trim().Length>Medicine.MaxManufacturerLength)e["manufacturer"]=[ $"Manufacturer cannot exceed {Medicine.MaxManufacturerLength} characters." ];if(r.UnitPrice<0)e["unitPrice"]=["Unit price cannot be negative."];if(r.ReorderThreshold<0)e["reorderThreshold"]=["Threshold cannot be negative."];if(e.Count>0)throw new ValidationException(e);}
  private static MedicineResponse Map(Medicine m)=>Map(m,m.InventoryItem);private static MedicineResponse Map(Medicine m,InventoryItem? i)=>new(m.Id,m.Name,m.GenericName,m.Manufacturer,m.UnitPrice,m.DosageForm,m.CategoryId,m.Category?.Name,m.IsActive,i?.QuantityOnHand??0,i?.ReorderThreshold??0,i?.IsLowStock??false,i?.Version??0);private static (int,int) Paging(int p,int s)=>(Math.Max(p,1),Math.Clamp(s,1,100));}
 

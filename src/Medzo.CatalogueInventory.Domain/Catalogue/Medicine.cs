@@ -2,6 +2,7 @@ using Medzo.CatalogueInventory.Domain.Common;
 using Medzo.CatalogueInventory.Domain.Inventory;
 namespace Medzo.CatalogueInventory.Domain.Catalogue;
 public sealed class Medicine : Entity {
+ public const int MaxNameLength=200;public const int MaxGenericNameLength=200;public const int MaxManufacturerLength=200;
  private Medicine() {}
  public Medicine(string name,string genericName,string manufacturer,decimal unitPrice,DosageForm dosageForm,Guid? categoryId=null){Update(name,genericName,manufacturer,unitPrice,dosageForm,categoryId);}
  public string Name {get;private set;}=null!; public string NormalizedName {get;private set;}=null!; public string GenericName {get;private set;}=null!; public string Manufacturer {get;private set;}=null!; public decimal UnitPrice {get;private set;} public DosageForm DosageForm {get;private set;} public Guid? CategoryId {get;private set;} public Category? Category {get;private set;} public bool IsActive {get;private set;}=true; public InventoryItem? InventoryItem {get;private set;}
