@@ -1,6 +1,5 @@
 <Solution>
   <Folder Name="/src/">
-    <Project Path="src/Medzo.CatalogueInventory.Api/Medzo.CatalogueInventory.Api.csproj" />
     <Project Path="src/Medzo.CatalogueInventory.Application/Medzo.CatalogueInventory.Application.csproj" />
     <Project Path="src/Medzo.CatalogueInventory.Domain/Medzo.CatalogueInventory.Domain.csproj" />
     <Project Path="src/Medzo.CatalogueInventory.Infrastructure/Medzo.CatalogueInventory.Infrastructure.csproj" />

@@ -1,7 +1,7 @@
 using Medzo.CatalogueInventory.Domain.Catalogue;
 namespace Medzo.CatalogueInventory.Application.Common;
 public sealed record PagedResult<T>(IReadOnlyList<T> Items,int Page,int PageSize,int TotalCount);
-public sealed record MedicineRequest(string Name,string GenericName,string Manufacturer,decimal UnitPrice,DosageForm DosageForm,Guid? CategoryId,int ReorderThreshold);
+public sealed record MedicineRequest(string Name,string GenericName,string Manufacturer,decimal? UnitPrice,DosageForm? DosageForm,Guid? CategoryId,int ReorderThreshold,bool AllowDuplicate=false);
 public sealed record MedicineResponse(Guid Id,string Name,string GenericName,string Manufacturer,decimal UnitPrice,DosageForm DosageForm,Guid? CategoryId,string? CategoryName,bool IsActive,int QuantityOnHand,int ReorderThreshold,bool IsLowStock,long Version);
 public sealed record RecordBatchRequest(Guid MedicineId,string BatchNumber,string? Description,DateOnly ExpiryDate,int Quantity,string? SourceReference);
 public sealed record BatchResponse(Guid Id,Guid MedicineId,string MedicineName,string BatchNumber,string? Description,DateOnly ExpiryDate,int InitialQuantity,int RemainingQuantity,DateTime ReceivedAtUtc,int QuantityOnHand,bool IsLowStock);
