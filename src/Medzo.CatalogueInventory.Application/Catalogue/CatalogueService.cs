@@ -7,6 +7,20 @@ namespace Medzo.CatalogueInventory.Application.Catalogue;
 
 public sealed class CatalogueService(ICatalogueInventoryStore store) : ICatalogueService
 {
+ public async Task<PagedResult<PublicMedicineResponse>> BrowsePublicAsync(string? search,int page,int size,CancellationToken ct)
+ {
+  (page,size)=Paging(page,size);
+  var query=store.Medicines.AsNoTracking().Include(x=>x.Category).Include(x=>x.InventoryItem)
+   .Where(x=>x.IsActive&&x.InventoryItem!=null&&x.InventoryItem.QuantityOnHand>0);
+  if(!string.IsNullOrWhiteSpace(search))
+  {
+   var term=search.Trim().ToUpperInvariant();
+   query=query.Where(x=>x.NormalizedName.Contains(term)||x.GenericName.ToUpper().Contains(term)||x.Manufacturer.ToUpper().Contains(term));
+  }
+  var total=await query.CountAsync(ct);
+  var rows=await query.OrderBy(x=>x.Name).Skip((page-1)*size).Take(size).ToListAsync(ct);
+  return new(rows.Select(x=>new PublicMedicineResponse(x.Id,x.Name,x.GenericName,x.Manufacturer,x.UnitPrice,x.DosageForm,x.Category==null?null:x.Category.Name,x.InventoryItem!.IsLowStock)).ToList(),page,size,total);
+ }
  public async Task<PagedResult<MedicineResponse>> SearchAsync(string? search,int page,int size,CancellationToken ct)
  {
   (page,size)=Paging(page,size);
@@ -35,9 +49,45 @@ public sealed class CatalogueService(ICatalogueInventoryStore store) : ICatalogu
   return new(rows.Select(Map).ToList(),page,size,total);
  }
  public async Task<MedicineResponse> GetAsync(Guid id,CancellationToken ct)=>Map(await store.Medicines.AsNoTracking().Include(x=>x.Category).Include(x=>x.InventoryItem).SingleOrDefaultAsync(x=>x.Id==id&&x.IsActive,ct)??throw new NotFoundException("Medicine was not found."));
- public Task<MedicineResponse> CreateAsync(MedicineRequest r,CancellationToken ct)=>store.ExecuteTransactionAsync(async token=>{Validate(r);var duplicate=await store.Medicines.AnyAsync(x=>x.NormalizedName==r.Name.Trim().ToUpper()&&x.Manufacturer.ToUpper()==r.Manufacturer.Trim().ToUpper(),token);if(duplicate&&!r.AllowDuplicate)throw new ConflictException("A medicine with the same name and manufacturer already exists. Confirm the duplicate to save it anyway.");var m=new Medicine(r.Name,r.GenericName,r.Manufacturer,r.UnitPrice!.Value,r.DosageForm!.Value,r.CategoryId);var i=new InventoryItem(m.Id,r.ReorderThreshold);await store.AddMedicineAsync(m,token);await store.AddInventoryItemAsync(i,token);await store.SaveChangesAsync(token);return Map(m,i);},ct);
- public Task<MedicineResponse> UpdateAsync(Guid id,MedicineRequest r,long version,CancellationToken ct)=>store.ExecuteTransactionAsync(async token=>{Validate(r);var m=await store.Medicines.Include(x=>x.InventoryItem).SingleOrDefaultAsync(x=>x.Id==id&&x.IsActive,token)??throw new NotFoundException("Medicine was not found.");if(m.InventoryItem!.Version!=version)throw new ConflictException("This medicine changed after you opened it. Reload the latest version before saving again.");if(await store.Medicines.AnyAsync(x=>x.Id!=id&&x.IsActive&&x.NormalizedName==r.Name.Trim().ToUpper()&&x.Manufacturer.ToUpper()==r.Manufacturer.Trim().ToUpper(),token))throw new ConflictException("A medicine with the same name and manufacturer already exists.");m.Update(r.Name,r.GenericName,r.Manufacturer,r.UnitPrice!.Value,r.DosageForm!.Value,r.CategoryId);m.InventoryItem.SetReorderThreshold(r.ReorderThreshold);m.InventoryItem.MarkCatalogueChanged();await store.SaveChangesAsync(token);return Map(m,m.InventoryItem);},ct);
+ public Task<MedicineResponse> CreateAsync(MedicineRequest r,CancellationToken ct)=>store.ExecuteTransactionAsync(async token=>
+ {
+  Validate(r);
+  var normalizedName=r.Name.Trim().ToUpperInvariant();
+  var normalizedManufacturer=r.Manufacturer.Trim().ToUpperInvariant();
+  var matches=await store.Medicines.Include(x=>x.InventoryItem)
+   .Where(x=>x.NormalizedName==normalizedName&&x.Manufacturer.ToUpper()==normalizedManufacturer)
+   .ToListAsync(token);
+  var active=matches.FirstOrDefault(x=>x.IsActive);
+  if(active is not null&&!r.AllowDuplicate)throw new ConflictException("A medicine with the same name and manufacturer already exists. Confirm the duplicate to save it anyway.");
+
+  if(active is null)
+  {
+   var inactive=matches.FirstOrDefault(x=>!x.IsActive);
+   if(inactive is not null)
+   {
+    var inventory=inactive.InventoryItem??throw new InvalidOperationException("The archived medicine has no inventory record.");
+    var wasLow=inventory.IsLowStock;
+    inactive.Update(r.Name,r.GenericName,r.Manufacturer,r.UnitPrice!.Value,r.DosageForm!.Value,r.CategoryId);
+    inactive.Activate();
+    inventory.SetReorderThreshold(r.ReorderThreshold);
+    inventory.MarkCatalogueChanged();
+    QueueLowStockTransition(inventory,wasLow,"CatalogueRestored");
+    await store.SaveChangesAsync(token);
+    return Map(inactive,inventory);
+   }
+  }
+
+  var m=new Medicine(r.Name,r.GenericName,r.Manufacturer,r.UnitPrice!.Value,r.DosageForm!.Value,r.CategoryId);
+  var i=new InventoryItem(m.Id,r.ReorderThreshold);
+  await store.AddMedicineAsync(m,token);
+  await store.AddInventoryItemAsync(i,token);
+  QueueLowStockTransition(i,false,"CatalogueCreated");
+  await store.SaveChangesAsync(token);
+  return Map(m,i);
+ },ct);
+ public Task<MedicineResponse> UpdateAsync(Guid id,MedicineRequest r,long version,CancellationToken ct)=>store.ExecuteTransactionAsync(async token=>{Validate(r);var m=await store.Medicines.Include(x=>x.InventoryItem).SingleOrDefaultAsync(x=>x.Id==id&&x.IsActive,token)??throw new NotFoundException("Medicine was not found.");if(m.InventoryItem!.Version!=version)throw new ConflictException("This medicine changed after you opened it. Reload the latest version before saving again.");if(await store.Medicines.AnyAsync(x=>x.Id!=id&&x.IsActive&&x.NormalizedName==r.Name.Trim().ToUpper()&&x.Manufacturer.ToUpper()==r.Manufacturer.Trim().ToUpper(),token))throw new ConflictException("A medicine with the same name and manufacturer already exists.");var wasLow=m.InventoryItem.IsLowStock;m.Update(r.Name,r.GenericName,r.Manufacturer,r.UnitPrice!.Value,r.DosageForm!.Value,r.CategoryId);m.InventoryItem.SetReorderThreshold(r.ReorderThreshold);m.InventoryItem.MarkCatalogueChanged();QueueLowStockTransition(m.InventoryItem,wasLow,"ReorderThresholdChanged");await store.SaveChangesAsync(token);return Map(m,m.InventoryItem);},ct);
  public Task DeleteAsync(Guid id,long version,CancellationToken ct)=>store.ExecuteTransactionAsync(async token=>{var m=await store.Medicines.Include(x=>x.InventoryItem).SingleOrDefaultAsync(x=>x.Id==id&&x.IsActive,token)??throw new NotFoundException("Medicine was not found.");if(m.InventoryItem!.Version!=version)throw new ConflictException("This medicine changed after you opened it. Reload the latest version before deleting it.");m.Deactivate();m.InventoryItem.MarkCatalogueChanged();await store.SaveChangesAsync(token);return true;},ct);
  private static void Validate(MedicineRequest r){var e=new Dictionary<string,string[]>();if(string.IsNullOrWhiteSpace(r.Name))e["name"]=["Name is required."];else if(r.Name.Trim().Length>Medicine.MaxNameLength)e["name"]=[ $"Name cannot exceed {Medicine.MaxNameLength} characters." ];if(string.IsNullOrWhiteSpace(r.GenericName))e["genericName"]=["Generic name is required."];else if(r.GenericName.Trim().Length>Medicine.MaxGenericNameLength)e["genericName"]=[ $"Generic name cannot exceed {Medicine.MaxGenericNameLength} characters." ];if(string.IsNullOrWhiteSpace(r.Manufacturer))e["manufacturer"]=["Manufacturer is required."];else if(r.Manufacturer.Trim().Length>Medicine.MaxManufacturerLength)e["manufacturer"]=[ $"Manufacturer cannot exceed {Medicine.MaxManufacturerLength} characters." ];if(r.UnitPrice is null)e["unitPrice"]=["Unit price is required."];else if(r.UnitPrice<0)e["unitPrice"]=["Unit price cannot be negative."];if(r.DosageForm is null||!Enum.IsDefined(r.DosageForm.Value))e["dosageForm"]=["A valid dosage form is required."];if(r.ReorderThreshold<0)e["reorderThreshold"]=["Threshold cannot be negative."];if(e.Count>0)throw new ValidationException(e);}
+ private void QueueLowStockTransition(InventoryItem item,bool wasLow,string reason){if(!wasLow&&item.IsLowStock)store.AddOutbox("inventory.low-stock-detected.v1",item.MedicineId.ToString(),"inventory.low-stock-detected.v1",new{item.MedicineId,item.QuantityOnHand,item.ReorderThreshold,reason,detectedAtUtc=DateTime.UtcNow});else if(wasLow&&!item.IsLowStock)store.AddOutbox("inventory.stock-recovered.v1",item.MedicineId.ToString(),"inventory.stock-recovered.v1",new{item.MedicineId,item.QuantityOnHand,item.ReorderThreshold,reason,recoveredAtUtc=DateTime.UtcNow});}
  private static MedicineResponse Map(Medicine m)=>Map(m,m.InventoryItem);private static MedicineResponse Map(Medicine m,InventoryItem? i)=>new(m.Id,m.Name,m.GenericName,m.Manufacturer,m.UnitPrice,m.DosageForm,m.CategoryId,m.Category?.Name,m.IsActive,i?.QuantityOnHand??0,i?.ReorderThreshold??0,i?.IsLowStock??false,i?.Version??0);private static (int,int) Paging(int p,int s)=>(Math.Max(p,1),Math.Clamp(s,1,100));}
 

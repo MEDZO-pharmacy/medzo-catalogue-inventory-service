@@ -33,6 +33,17 @@ internal static class LocalEnvironmentFile
                 continue;
             }
 
+            // Accept values accidentally copied from Windows Command Prompt,
+            // for example: set "Jwt__Issuer=MedzoAuthService".
+            if (line.StartsWith("set ", StringComparison.OrdinalIgnoreCase))
+            {
+                line = line[4..].Trim();
+                if (line.Length >= 2 && line[0] == '"' && line[^1] == '"')
+                {
+                    line = line[1..^1];
+                }
+            }
+
             var separator = line.IndexOf('=');
             if (separator <= 0)
             {

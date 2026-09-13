@@ -164,6 +164,26 @@ public sealed class CatalogueCrudTests
     }
 
     [Fact]
+    public async Task Create_WhenMatchingMedicineWasDeleted_RestoresItAndPreservesInventory()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var created = await fixture.Service.CreateAsync(Request("Vitamin C"), TestContext.Current.CancellationToken);
+        await fixture.Service.DeleteAsync(created.Id, created.Version, TestContext.Current.CancellationToken);
+
+        var restored = await fixture.Service.CreateAsync(
+            Request(" vitamin c ") with { GenericName = "Ascorbic acid", UnitPrice = 25m, ReorderThreshold = 9 },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(created.Id, restored.Id);
+        Assert.True(restored.IsActive);
+        Assert.Equal("Ascorbic acid", restored.GenericName);
+        Assert.Equal(25m, restored.UnitPrice);
+        Assert.Equal(9, restored.ReorderThreshold);
+        Assert.Single(await fixture.Db.MedicineSet.ToListAsync(TestContext.Current.CancellationToken));
+        Assert.Single(await fixture.Db.InventoryItemSet.ToListAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task Delete_WithStaleVersion_DoesNotDeactivateMedicine()
     {
         await using var fixture = await Fixture.CreateAsync();
