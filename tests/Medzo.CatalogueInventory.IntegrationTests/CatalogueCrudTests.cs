@@ -125,6 +125,56 @@ public sealed class CatalogueCrudTests
         Assert.Equal("Original", unchanged.Name);
     }
 
+    [Fact]
+    public async Task Update_WhenAnotherCatalogueEditWasSaved_RejectsTheStaleEditor()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var openedByBothUsers = await fixture.Service.CreateAsync(Request("Original"), TestContext.Current.CancellationToken);
+
+        var firstSave = await fixture.Service.UpdateAsync(
+            openedByBothUsers.Id,
+            Request("First editor") with { ReorderThreshold = openedByBothUsers.ReorderThreshold },
+            openedByBothUsers.Version,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(firstSave.Version > openedByBothUsers.Version);
+        var conflict = await Assert.ThrowsAsync<ConflictException>(() => fixture.Service.UpdateAsync(
+            openedByBothUsers.Id,
+            Request("Second editor") with { ReorderThreshold = openedByBothUsers.ReorderThreshold },
+            openedByBothUsers.Version,
+            TestContext.Current.CancellationToken));
+
+        Assert.Contains("changed after you opened", conflict.Message);
+        var persisted = await fixture.Service.GetAsync(openedByBothUsers.Id, TestContext.Current.CancellationToken);
+        Assert.Equal("First editor", persisted.Name);
+    }
+
+    [Fact]
+    public async Task Delete_DeactivatesMedicineAndPreservesInventoryAuditData()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var created = await fixture.Service.CreateAsync(Request("Medicine to remove"), TestContext.Current.CancellationToken);
+
+        await fixture.Service.DeleteAsync(created.Id, created.Version, TestContext.Current.CancellationToken);
+
+        Assert.False(await fixture.Db.MedicineSet.Where(x => x.Id == created.Id).Select(x => x.IsActive).SingleAsync(TestContext.Current.CancellationToken));
+        Assert.True(await fixture.Db.InventoryItemSet.AnyAsync(x => x.MedicineId == created.Id, TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<NotFoundException>(() => fixture.Service.GetAsync(created.Id, TestContext.Current.CancellationToken));
+        Assert.DoesNotContain((await fixture.Service.SearchAsync(null, 1, 20, TestContext.Current.CancellationToken)).Items, x => x.Id == created.Id);
+    }
+
+    [Fact]
+    public async Task Delete_WithStaleVersion_DoesNotDeactivateMedicine()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var created = await fixture.Service.CreateAsync(Request("Protected medicine"), TestContext.Current.CancellationToken);
+
+        await Assert.ThrowsAsync<ConflictException>(() =>
+            fixture.Service.DeleteAsync(created.Id, created.Version + 1, TestContext.Current.CancellationToken));
+
+        Assert.True((await fixture.Service.GetAsync(created.Id, TestContext.Current.CancellationToken)).IsActive);
+    }
+
     private static MedicineRequest Request(string name) =>
         new(name, "Generic", "Medzo Labs", 10m, DosageForm.Tablet, null, 5);
 
