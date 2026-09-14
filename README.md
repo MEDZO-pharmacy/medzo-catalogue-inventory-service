@@ -53,16 +53,15 @@ Before enabling deployment, configure the following in this repository:
 | Variable | `AZURE_WEBAPP_NAME` | Azure App Service name for this service |
 | Variable | `CATALOGUE_HEALTH_URL` | HTTPS service origin, without `/health` |
 | Variable | `DEPLOY_ENABLED` | `true` after all configuration below is complete |
-| Secret | `AZURE_CLIENT_ID` | Azure deployment identity client ID |
-| Secret | `AZURE_TENANT_ID` | Azure tenant ID |
-| Secret | `AZURE_SUBSCRIPTION_ID` | Azure subscription ID |
+| Secret | `REGISTRY_USERNAME` | Azure Container Registry admin username |
+| Secret | `REGISTRY_PASSWORD` | Azure Container Registry admin password |
+| Secret | `AZURE_WEBAPP_PUBLISH_PROFILE` | Downloaded publish profile for the catalogue App Service |
 | Secret | `CATALOGUE_DATABASE_CONNECTION` | Azure SQL connection string for `medzo_inventory_db` |
 
-Create a GitHub `production` environment and configure Azure OIDC federation
-for `repo:MEDZO-pharmacy/medzo-catalogue-inventory-service:environment:production`.
-The deployment identity needs permission to push images to the registry and
-deploy to the App Service. The App Service identity needs permission to pull
-images from the registry.
+Create a GitHub `production` environment. This workflow follows the auth service
+pattern: it signs in to Azure Container Registry with the registry admin
+credentials and deploys with the App Service publish profile. The App Service
+must be configured to pull images from the same registry.
 
 Configure these App Service application settings separately. They are runtime
 configuration and must not be committed to Git:

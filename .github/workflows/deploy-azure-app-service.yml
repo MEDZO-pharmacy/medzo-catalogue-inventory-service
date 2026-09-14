@@ -35,9 +35,6 @@ jobs:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/dev' && vars.DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-latest
     environment: production
-    permissions:
-      contents: read
-      id-token: write
     env:
       REGISTRY_NAME: ${{ vars.AZURE_REGISTRY_NAME }}
       WEBAPP_NAME: ${{ vars.AZURE_WEBAPP_NAME }}
@@ -48,11 +45,6 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
-      - uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       - name: Validate deployment configuration
         shell: bash
         run: |
@@ -61,6 +53,12 @@ jobs:
           : "${WEBAPP_NAME:?Set AZURE_WEBAPP_NAME}"
           : "${HEALTH_URL:?Set CATALOGUE_HEALTH_URL}"
           : "${DATABASE_CONNECTION:?Set CATALOGUE_DATABASE_CONNECTION}"
+      - name: Log in to Azure Container Registry
+        uses: azure/docker-login@v2
+        with:
+          login-server: ${{ vars.AZURE_REGISTRY_NAME }}.azurecr.io
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
       - name: Apply Azure SQL migrations
         env:
           ConnectionStrings__CatalogueInventory: ${{ secrets.CATALOGUE_DATABASE_CONNECTION }}
@@ -71,9 +69,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          az acr login --name "$REGISTRY_NAME"
-          registry=$(az acr show --name "$REGISTRY_NAME" --query loginServer -o tsv)
-          image="$registry/${IMAGE_NAME}:${GITHUB_SHA}"
+          image="${REGISTRY_NAME}.azurecr.io/${IMAGE_NAME}:${GITHUB_SHA}"
           docker build -f docker/Dockerfile -t "$image" .
           docker push "$image"
           echo "IMAGE=$image" >> "$GITHUB_ENV"
@@ -81,6 +77,7 @@ jobs:
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ vars.AZURE_WEBAPP_NAME }}
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
           images: ${{ env.IMAGE }}
       - name: Verify service health
         shell: bash
