@@ -5,7 +5,27 @@ public sealed class CatalogueInventoryDbContext(DbContextOptions<CatalogueInvent
  IQueryable<Medicine> ICatalogueInventoryStore.Medicines=>MedicineSet;IQueryable<InventoryItem> ICatalogueInventoryStore.InventoryItems=>InventoryItemSet;IQueryable<StockBatch> ICatalogueInventoryStore.StockBatches=>StockBatches;IQueryable<StockMovement> ICatalogueInventoryStore.StockMovements=>MovementSet;
  protected override void OnModelCreating(ModelBuilder b){b.ApplyConfigurationsFromAssembly(typeof(CatalogueInventoryDbContext).Assembly);foreach(var entity in b.Model.GetEntityTypes().Where(x=>typeof(Medzo.CatalogueInventory.Domain.Common.Entity).IsAssignableFrom(x.ClrType)))b.Entity(entity.ClrType).Property(nameof(Medzo.CatalogueInventory.Domain.Common.Entity.Id)).ValueGeneratedNever();}
  public Task AddMedicineAsync(Medicine x,CancellationToken ct)=>MedicineSet.AddAsync(x,ct).AsTask();public Task AddInventoryItemAsync(InventoryItem x,CancellationToken ct)=>InventoryItemSet.AddAsync(x,ct).AsTask();public Task AddBatchAsync(StockBatch x,CancellationToken ct)=>StockBatches.AddAsync(x,ct).AsTask();
- public async Task<T> ExecuteTransactionAsync<T>(Func<CancellationToken,Task<T>> action,CancellationToken ct){if(Database.CurrentTransaction is not null)return await action(ct);await using var tx=await Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable,ct);try{var result=await action(ct);await tx.CommitAsync(ct);return result;}catch{await tx.RollbackAsync(ct);ChangeTracker.Clear();throw;}}
+ public async Task<T> ExecuteTransactionAsync<T>(Func<CancellationToken,Task<T>> action,CancellationToken ct)
+ {
+  if(Database.CurrentTransaction is not null)return await action(ct);
+  var strategy=Database.CreateExecutionStrategy();
+  return await strategy.ExecuteAsync(async()=>
+  {
+   await using var tx=await Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable,ct);
+   try
+   {
+    var result=await action(ct);
+    await tx.CommitAsync(ct);
+    return result;
+   }
+   catch
+   {
+    await tx.RollbackAsync(ct);
+    ChangeTracker.Clear();
+    throw;
+   }
+  });
+ }
  public async Task<bool> TryBeginEventAsync(Guid eventId,string topic,CancellationToken ct){if(await ProcessedEvents.AnyAsync(x=>x.EventId==eventId,ct))return false;await ProcessedEvents.AddAsync(new(eventId,topic),ct);return true;}
  public void AddOutbox(string topic,string key,string type,object data)=>OutboxMessages.Add(new(topic,key,type,JsonSerializer.Serialize(new{eventId=Guid.NewGuid(),eventType=type,eventVersion=1,occurredAtUtc=DateTime.UtcNow,producer="medzo-catalogue-inventory-service",data})));
 }

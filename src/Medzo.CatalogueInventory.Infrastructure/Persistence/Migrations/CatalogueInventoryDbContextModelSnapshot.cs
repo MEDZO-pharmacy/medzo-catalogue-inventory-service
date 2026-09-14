@@ -82,8 +82,7 @@ namespace Medzo.CatalogueInventory.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("CategoryId");
 
-                    b.HasIndex("NormalizedName")
-                        .IsUnique();
+                    b.HasIndex("NormalizedName");
 
                     b.ToTable("medicines", (string)null);
                 });
@@ -103,6 +102,7 @@ namespace Medzo.CatalogueInventory.Infrastructure.Persistence.Migrations
                         .HasColumnType("int");
 
                     b.Property<long>("Version")
+                        .IsConcurrencyToken()
                         .HasColumnType("bigint");
 
                     b.HasKey("Id");

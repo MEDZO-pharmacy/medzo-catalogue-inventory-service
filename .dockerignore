@@ -1,5 +1,9 @@
+.git
+.github
 **/bin
 **/obj
-.git
 .env
-tests
+*.user
+*.suo
+TestResults
+frontend/node_modules

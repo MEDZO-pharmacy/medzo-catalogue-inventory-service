@@ -6,3 +6,6 @@ frontend/dist/
 frontend/.env
 *.user
 *.suo
+*.db
+*.db-shm
+*.db-wal

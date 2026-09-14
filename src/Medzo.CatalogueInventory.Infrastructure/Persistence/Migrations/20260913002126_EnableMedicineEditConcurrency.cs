@@ -5,7 +5,7 @@
 namespace Medzo.CatalogueInventory.Infrastructure.Persistence.Migrations
 {
     /// <inheritdoc />
-    public partial class UseClientGeneratedEntityIds : Migration
+    public partial class EnableMedicineEditConcurrency : Migration
     {
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
