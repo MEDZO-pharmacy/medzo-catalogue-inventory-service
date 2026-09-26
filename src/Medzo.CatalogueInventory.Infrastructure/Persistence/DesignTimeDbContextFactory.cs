@@ -19,7 +19,11 @@ public sealed class DesignTimeDbContextFactory : IDesignTimeDbContextFactory<Cat
 
         var options = new DbContextOptionsBuilder<CatalogueInventoryDbContext>()
             .UseSqlServer(connection, builder =>
-                builder.MigrationsAssembly(typeof(CatalogueInventoryDbContext).Assembly.FullName))
+            {
+                builder.MigrationsAssembly(typeof(CatalogueInventoryDbContext).Assembly.FullName);
+                // Azure SQL Serverless may need time to resume after auto-pause.
+                builder.EnableRetryOnFailure(6, TimeSpan.FromSeconds(10), null);
+            })
             .Options;
         return new CatalogueInventoryDbContext(options);
     }
