@@ -1,0 +1,56 @@
+name: Catalogue Service - Build GHCR
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_NAME: medzo-catalogue-inventory-service
+
+jobs:
+  build-test-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore Medzo.CatalogueInventory.slnx
+
+      - name: Build
+        run: dotnet build src/Medzo.CatalogueInventory.Api/Medzo.CatalogueInventory.Api.csproj -c Release --no-restore
+
+      - name: Run unit tests
+        run: dotnet test tests/Medzo.CatalogueInventory.UnitTests/Medzo.CatalogueInventory.UnitTests.csproj -c Release --no-restore
+
+      - name: Run integration tests
+        run: dotnet test tests/Medzo.CatalogueInventory.IntegrationTests/Medzo.CatalogueInventory.IntegrationTests.csproj -c Release --no-restore
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/medzo-catalogue-inventory-service:${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/medzo-catalogue-inventory-service:latest
