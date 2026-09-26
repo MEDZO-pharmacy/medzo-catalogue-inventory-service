@@ -44,6 +44,17 @@ jobs:
           dotnet test tests/Medzo.CatalogueInventory.UnitTests/Medzo.CatalogueInventory.UnitTests.csproj --configuration Release --no-restore
           dotnet test tests/Medzo.CatalogueInventory.IntegrationTests/Medzo.CatalogueInventory.IntegrationTests.csproj --configuration Release --no-restore
 
+      # The API does not migrate at startup. Keep the Azure SQL schema current
+      # before rolling out code that depends on new tables or indexes.
+      - name: Apply Azure SQL migrations
+        env:
+          ConnectionStrings__CatalogueInventory: ${{ secrets.CATALOGUE_DATABASE_CONNECTION }}
+        run: |
+          dotnet tool restore
+          dotnet tool run dotnet-ef database update \
+            --project src/Medzo.CatalogueInventory.Infrastructure \
+            --startup-project src/Medzo.CatalogueInventory.Api
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
