@@ -44,31 +44,6 @@ jobs:
           dotnet test tests/Medzo.CatalogueInventory.UnitTests/Medzo.CatalogueInventory.UnitTests.csproj --configuration Release --no-restore
           dotnet test tests/Medzo.CatalogueInventory.IntegrationTests/Medzo.CatalogueInventory.IntegrationTests.csproj --configuration Release --no-restore
 
-      # The API does not migrate at startup. Keep the Azure SQL schema current
-      # before rolling out code that depends on new tables or indexes.
-      - name: Apply Azure SQL migrations
-        env:
-          ConnectionStrings__CatalogueInventory: ${{ secrets.CATALOGUE_DATABASE_CONNECTION }}
-        run: |
-          if [ -z "$ConnectionStrings__CatalogueInventory" ]; then
-            echo "::error::Set the CATALOGUE_DATABASE_CONNECTION Actions secret for Azure SQL migrations."
-            exit 1
-          fi
-          dotnet tool restore
-          for attempt in 1 2 3 4 5; do
-            if dotnet tool run dotnet-ef database update \
-              --project src/Medzo.CatalogueInventory.Infrastructure \
-              --startup-project src/Medzo.CatalogueInventory.Api; then
-              exit 0
-            fi
-            if [ "$attempt" -lt 5 ]; then
-              echo "Azure SQL migration attempt $attempt failed; retrying after 15 seconds."
-              sleep 15
-            fi
-          done
-          echo "::error::Azure SQL migrations failed after 5 attempts. Check Azure SQL firewall access and the CATALOGUE_DATABASE_CONNECTION secret."
-          exit 1
-
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
