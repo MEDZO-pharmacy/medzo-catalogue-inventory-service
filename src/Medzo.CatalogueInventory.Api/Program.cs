@@ -59,6 +59,7 @@ builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy("CatalogueRead", policy => policy.RequireRole("Pharmacist", "InventoryManager", "Admin"));
     options.AddPolicy("InventoryRead", policy => policy.RequireRole("Pharmacist", "InventoryManager", "Admin"));
+    options.AddPolicy("InventoryEdit", policy => policy.RequireRole("Pharmacist", "InventoryManager", "Admin"));
     options.AddPolicy("InventoryManage", policy => policy.RequireRole("InventoryManager", "Admin"));
 });
 

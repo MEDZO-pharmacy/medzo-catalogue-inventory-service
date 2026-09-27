@@ -6,10 +6,18 @@ public sealed record MedicineResponse(Guid Id,string Name,string GenericName,str
 public sealed record PublicMedicineResponse(Guid Id,string Name,string GenericName,string Manufacturer,decimal UnitPrice,DosageForm DosageForm,string? CategoryName,bool LowStock);
 public sealed record RecordBatchRequest(Guid MedicineId,string BatchNumber,string? Description,DateOnly ExpiryDate,int Quantity,string? SourceReference);
 public sealed record BatchResponse(Guid Id,Guid MedicineId,string MedicineName,string BatchNumber,string? Description,DateOnly ExpiryDate,int InitialQuantity,int RemainingQuantity,DateTime ReceivedAtUtc,int QuantityOnHand,bool IsLowStock);
+public sealed record NearExpiryBatchResponse(Guid Id,Guid MedicineId,string MedicineName,string BatchNumber,DateOnly ExpiryDate,int DaysUntilExpiry,int RemainingQuantity);
+public sealed record BatchRemovalCandidateResponse(Guid Id,Guid MedicineId,string MedicineName,string BatchNumber,DateOnly ExpiryDate,int DaysUntilExpiry,int RemainingQuantity,bool IsExpired);
+public sealed record RemoveBatchRequest(string IdempotencyKey,string Reason,string RemovedBy);
+public sealed record BatchRemovalResponse(Guid BatchId,Guid MedicineId,string MedicineName,string BatchNumber,int RemovedQuantity,string Reason,string RemovedBy,DateTime RemovedAtUtc,bool AlreadyRemoved);
 public sealed record InventoryResponse(Guid MedicineId,string Name,string GenericName,int QuantityOnHand,int ReorderThreshold,bool IsLowStock,DateOnly? NextExpiry,long Version);
 public sealed record MovementResponse(Guid Id,string Type,int QuantityDelta,int QuantityBefore,int QuantityAfter,string SourceType,string SourceId,string? BatchNumber,DateTime OccurredAtUtc);
 public sealed record PurchaseStockReceiptResponse(Guid MovementId,Guid MedicineId,string MedicineName,string BatchNumber,DateOnly ExpiryDate,int QuantityReceived,int QuantityBefore,int QuantityAfter,string PurchaseReference,DateTime ProcessedAtUtc);
 public sealed record SaleStockIssueResponse(Guid MovementId,Guid MedicineId,string MedicineName,string BatchNumber,DateOnly ExpiryDate,int QuantitySold,int QuantityBefore,int QuantityAfter,string SaleReference,DateTime ProcessedAtUtc);
+public sealed record CompleteSaleRequest(Guid SaleId,string? SaleReference,IReadOnlyList<CompleteSaleLine> Items);
+public sealed record CompleteSaleLine(Guid MedicineId,int Quantity);
+public sealed record CompletedSaleReceiptResponse(Guid SaleId,string SaleReference,DateTime CompletedAtUtc,IReadOnlyList<CompletedSaleReceiptItemResponse> Items);
+public sealed record CompletedSaleReceiptItemResponse(Guid MedicineId,string MedicineName,int Quantity,IReadOnlyList<CompletedSaleBatchAllocationResponse> BatchAllocations);
+public sealed record CompletedSaleBatchAllocationResponse(Guid BatchId,string BatchNumber,DateOnly ExpiryDate,int Quantity,int QuantityBefore,int QuantityAfter);
 public sealed record ExternalStockLine(Guid MedicineId,int Quantity,string? BatchNumber,string? Description,DateOnly? ExpiryDate);
 public sealed record ExternalStockEvent(Guid EventId,string SourceId,DateTime OccurredAtUtc,IReadOnlyList<ExternalStockLine> Lines);
-
