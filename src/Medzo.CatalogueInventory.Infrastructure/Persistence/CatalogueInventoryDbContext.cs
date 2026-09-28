@@ -26,6 +26,7 @@ public sealed class CatalogueInventoryDbContext(DbContextOptions<CatalogueInvent
    }
   });
  }
- public async Task<bool> TryBeginEventAsync(Guid eventId,string topic,CancellationToken ct){if(await ProcessedEvents.AnyAsync(x=>x.EventId==eventId,ct))return false;await ProcessedEvents.AddAsync(new(eventId,topic),ct);return true;}
+ public Task<bool> HasProcessedEventAsync(Guid eventId,CancellationToken ct)=>ProcessedEvents.AnyAsync(x=>x.EventId==eventId,ct);
+ public async Task<bool> TryBeginEventAsync(Guid eventId,string topic,CancellationToken ct){if(await HasProcessedEventAsync(eventId,ct))return false;await ProcessedEvents.AddAsync(new(eventId,topic),ct);return true;}
  public void AddOutbox(string topic,string key,string type,object data)=>OutboxMessages.Add(new(topic,key,type,JsonSerializer.Serialize(new{eventId=Guid.NewGuid(),eventType=type,eventVersion=1,occurredAtUtc=DateTime.UtcNow,producer="medzo-catalogue-inventory-service",data})));
 }

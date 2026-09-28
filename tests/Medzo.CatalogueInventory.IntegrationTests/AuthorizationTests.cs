@@ -1,6 +1,7 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text;
 using Microsoft.AspNetCore.Hosting;
@@ -26,6 +27,24 @@ public sealed class AuthorizationTests : IClassFixture<AuthorizationTests.ApiFac
         var response = await _client.GetAsync("/api/catalogue/medicines", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task CompleteSale_WithoutAccessToken_ReturnsUnauthorizedInsteadOfNotFound()
+    {
+        var response = await _client.PostAsJsonAsync("/api/inventory/sales", new { saleId = Guid.Empty, saleReference = "SALE-INVALID", items = new[] { new { medicineId = Guid.NewGuid(), quantity = 1 } } }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task CompleteSale_AsPharmacistWithInvalidId_ReturnsBadRequest()
+    {
+        UseToken("Pharmacist");
+
+        var response = await _client.PostAsJsonAsync("/api/inventory/sales", new { saleId = Guid.Empty, saleReference = "SALE-INVALID", items = new[] { new { medicineId = Guid.NewGuid(), quantity = 1 } } }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
     [Fact]

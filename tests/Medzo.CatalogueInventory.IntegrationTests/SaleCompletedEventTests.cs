@@ -12,6 +12,62 @@ namespace Medzo.CatalogueInventory.IntegrationTests;
 public sealed class SaleCompletedEventTests
 {
     [Fact]
+    public async Task CompleteSale_DeductsStockAndReturnsReceiptWithBatchAllocation()
+    {
+        await using var fixture = await Fixture.CreateAsync(30);
+        var request = new CompleteSaleRequest(Guid.NewGuid(), "SALE-HTTP-1", [new(fixture.MedicineId, 7)]);
+
+        var receipt = await fixture.Service.CompleteSaleAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.False(receipt.AlreadyProcessed);
+        Assert.Equal(request.SaleId, receipt.SaleId);
+        Assert.Equal("SALE-HTTP-1", receipt.SaleReference);
+        Assert.Equal(70m, receipt.GrandTotal);
+        Assert.Equal(7, Assert.Single(receipt.Items).Quantity);
+        Assert.Equal(7, Assert.Single(receipt.Items[0].BatchAllocations).Quantity);
+        Assert.Equal(23, (await fixture.Db.InventoryItemSet.AsNoTracking().SingleAsync(TestContext.Current.CancellationToken)).QuantityOnHand);
+    }
+
+    [Fact]
+    public async Task CompleteSale_RetryWithSameIdDoesNotDeductAgain()
+    {
+        await using var fixture = await Fixture.CreateAsync(30);
+        var request = new CompleteSaleRequest(Guid.NewGuid(), "SALE-HTTP-RETRY", [new(fixture.MedicineId, 7)]);
+
+        await fixture.Service.CompleteSaleAsync(request, TestContext.Current.CancellationToken);
+        var retry = await fixture.Service.CompleteSaleAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.True(retry.AlreadyProcessed);
+        Assert.Equal(23, (await fixture.Db.InventoryItemSet.AsNoTracking().SingleAsync(TestContext.Current.CancellationToken)).QuantityOnHand);
+        Assert.Single(await fixture.Db.MovementSet.Where(x => x.Type == StockMovementType.SaleDispensed).ToListAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task CompleteSale_InsufficientStockRollsBackEverything()
+    {
+        await using var fixture = await Fixture.CreateAsync(5);
+        var request = new CompleteSaleRequest(Guid.NewGuid(), "SALE-HTTP-TOO-LARGE", [new(fixture.MedicineId, 6)]);
+
+        await Assert.ThrowsAsync<ConflictException>(() => fixture.Service.CompleteSaleAsync(request, TestContext.Current.CancellationToken));
+
+        Assert.Equal(5, (await fixture.Db.InventoryItemSet.AsNoTracking().SingleAsync(TestContext.Current.CancellationToken)).QuantityOnHand);
+        Assert.Empty(await fixture.Db.ProcessedEvents.AsNoTracking().ToListAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task CompleteSale_ExpiredOnlyStockIsRejectedWithoutDeduction()
+    {
+        await using var fixture = await Fixture.CreateAsync(5);
+        await fixture.Db.Database.ExecuteSqlRawAsync("UPDATE stock_batches SET ExpiryDate = '2020-01-01'", TestContext.Current.CancellationToken);
+        var request = new CompleteSaleRequest(Guid.NewGuid(), "SALE-HTTP-EXPIRED", [new(fixture.MedicineId, 1)]);
+
+        var error = await Assert.ThrowsAsync<ConflictException>(() => fixture.Service.CompleteSaleAsync(request, TestContext.Current.CancellationToken));
+
+        Assert.Contains("expired", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(5, (await fixture.Db.InventoryItemSet.AsNoTracking().SingleAsync(TestContext.Current.CancellationToken)).QuantityOnHand);
+    }
+
+    [Fact]
     public async Task ApplySale_DecreasesBatchAndInventoryAndCreatesAuditRecords()
     {
         await using var fixture = await Fixture.CreateAsync(30);

@@ -10,6 +10,11 @@ public sealed record InventoryResponse(Guid MedicineId,string Name,string Generi
 public sealed record MovementResponse(Guid Id,string Type,int QuantityDelta,int QuantityBefore,int QuantityAfter,string SourceType,string SourceId,string? BatchNumber,DateTime OccurredAtUtc);
 public sealed record PurchaseStockReceiptResponse(Guid MovementId,Guid MedicineId,string MedicineName,string BatchNumber,DateOnly ExpiryDate,int QuantityReceived,int QuantityBefore,int QuantityAfter,string PurchaseReference,DateTime ProcessedAtUtc);
 public sealed record SaleStockIssueResponse(Guid MovementId,Guid MedicineId,string MedicineName,string BatchNumber,DateOnly ExpiryDate,int QuantitySold,int QuantityBefore,int QuantityAfter,string SaleReference,DateTime ProcessedAtUtc);
+public sealed record CompleteSaleRequest(Guid SaleId,string SaleReference,IReadOnlyList<CompleteSaleLine> Items);
+public sealed record CompleteSaleLine(Guid MedicineId,int Quantity);
+public sealed record CompletedSaleBatch(Guid BatchId,string BatchNumber,DateOnly ExpiryDate,int Quantity);
+public sealed record CompletedSaleItem(Guid MedicineId,string MedicineName,int Quantity,decimal UnitPrice,decimal LineTotal,IReadOnlyList<CompletedSaleBatch> BatchAllocations);
+public sealed record CompletedSaleResponse(Guid SaleId,string SaleReference,DateTime CompletedAtUtc,bool AlreadyProcessed,IReadOnlyList<CompletedSaleItem> Items,decimal GrandTotal);
 public sealed record ExternalStockLine(Guid MedicineId,int Quantity,string? BatchNumber,string? Description,DateOnly? ExpiryDate);
 public sealed record ExternalStockEvent(Guid EventId,string SourceId,DateTime OccurredAtUtc,IReadOnlyList<ExternalStockLine> Lines);
 
