@@ -79,6 +79,12 @@ if (builder.Configuration.GetValue<bool>("Database:MigrateOnStartup"))
     await database.Database.MigrateAsync();
 }
 
+if (string.Equals(builder.Configuration["Database:Provider"], "Sqlite", StringComparison.OrdinalIgnoreCase))
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    var database = scope.ServiceProvider.GetRequiredService<CatalogueInventoryDbContext>();
+    await EnsureSqliteReceiptColumnsAsync(database);
+}
 if (app.Environment.IsDevelopment() && builder.Configuration.GetValue<bool>("SeedDemoData:Enabled"))
     await DemoDataSeeder.SeedAsync(app.Services);
 
@@ -89,5 +95,37 @@ app.UseAuthorization();
 app.MapControllers();
 app.MapHealthChecks("/health");
 app.Run();
+
+static async Task EnsureSqliteReceiptColumnsAsync(CatalogueInventoryDbContext database)
+{
+    var connection = database.Database.GetDbConnection();
+    await connection.OpenAsync();
+    try
+    {
+        await using var columnsCommand = connection.CreateCommand();
+        columnsCommand.CommandText = "PRAGMA table_info(stock_movements);";
+        await using var reader = await columnsCommand.ExecuteReaderAsync();
+        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        while (await reader.ReadAsync()) columns.Add(reader.GetString(1));
+        await reader.DisposeAsync();
+
+        if (!columns.Contains("PharmacistUsername"))
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = "ALTER TABLE stock_movements ADD COLUMN PharmacistUsername TEXT NULL;";
+            await command.ExecuteNonQueryAsync();
+        }
+        if (!columns.Contains("UnitPrice"))
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = "ALTER TABLE stock_movements ADD COLUMN UnitPrice NUMERIC NULL;";
+            await command.ExecuteNonQueryAsync();
+        }
+    }
+    finally
+    {
+        await connection.CloseAsync();
+    }
+}
 
 public partial class Program;
