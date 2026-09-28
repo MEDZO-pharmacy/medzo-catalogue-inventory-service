@@ -16,7 +16,7 @@ public sealed record PurchaseStockReceiptResponse(Guid MovementId,Guid MedicineI
 public sealed record SaleStockIssueResponse(Guid MovementId,Guid MedicineId,string MedicineName,string BatchNumber,DateOnly ExpiryDate,int QuantitySold,int QuantityBefore,int QuantityAfter,string SaleReference,DateTime ProcessedAtUtc);
 public sealed record CompleteSaleRequest(Guid SaleId,string? SaleReference,IReadOnlyList<CompleteSaleLine> Items,string? PharmacistUsername=null);
 public sealed record CompleteSaleLine(Guid MedicineId,int Quantity);
-public sealed record CompletedSaleReceiptResponse(Guid SaleId,string SaleReference,DateTime CompletedAtUtc,string? PharmacistUsername,IReadOnlyList<CompletedSaleReceiptItemResponse> Items);
+public sealed record CompletedSaleReceiptResponse(Guid SaleId,string SaleReference,DateTime CompletedAtUtc,string? PharmacistUsername,IReadOnlyList<CompletedSaleReceiptItemResponse> Items,bool AlreadyProcessed=false,decimal GrandTotal=0);
 public sealed record CompletedSaleReceiptItemResponse(Guid MedicineId,string MedicineName,int Quantity,decimal UnitPrice,decimal LineTotal,IReadOnlyList<CompletedSaleBatchAllocationResponse> BatchAllocations);
 public sealed record CompletedSaleBatchAllocationResponse(Guid BatchId,string BatchNumber,DateOnly ExpiryDate,int Quantity,int QuantityBefore,int QuantityAfter);
 public sealed record ExternalStockLine(Guid MedicineId,int Quantity,string? BatchNumber,string? Description,DateOnly? ExpiryDate);

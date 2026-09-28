@@ -38,6 +38,22 @@ public sealed class AuthorizationTests : IClassFixture<AuthorizationTests.ApiFac
     }
 
     [Fact]
+    public async Task NearExpiry_WithoutAccessToken_ReturnsUnauthorized()
+    {
+        var response = await _client.GetAsync("/api/inventory/batches/near-expiry?withinDays=30&page=1&pageSize=20", TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Receipt_WithoutAccessToken_ReturnsUnauthorized()
+    {
+        var response = await _client.GetAsync("/api/inventory/sales/SALE-INVALID/receipt", TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
     public async Task CompleteSale_AsPharmacistWithInvalidId_ReturnsBadRequest()
     {
         UseToken("Pharmacist");
