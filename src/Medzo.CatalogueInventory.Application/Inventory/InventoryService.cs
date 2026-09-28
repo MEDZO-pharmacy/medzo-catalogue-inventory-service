@@ -30,6 +30,74 @@ public sealed class InventoryService(ICatalogueInventoryStore store) : IInventor
         return new(rows.Select(x => MapBatch(x.b, x.i, x.m.Name)).ToList(), page, size, total);
     }
 
+    public async Task<PagedResult<NearExpiryBatchResponse>> GetNearExpiryBatchesAsync(int withinDays, int page, int size, CancellationToken ct)
+    {
+        (page, size) = Page(page, size);
+        withinDays = Math.Clamp(withinDays, 1, 365);
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var lastExpiryDate = today.AddDays(withinDays);
+        var query = store.StockBatches.AsNoTracking()
+            .Where(batch => batch.RemainingQuantity > 0 && batch.ExpiryDate >= today && batch.ExpiryDate <= lastExpiryDate)
+            .Join(store.InventoryItems, batch => batch.InventoryItemId, item => item.Id, (batch, item) => new { batch, item })
+            .Join(store.Medicines.Where(medicine => medicine.IsActive), row => row.item.MedicineId, medicine => medicine.Id, (row, medicine) => new { row.batch, row.item, medicine });
+        var total = await query.CountAsync(ct);
+        var rows = await query.OrderBy(x => x.batch.ExpiryDate).ThenBy(x => x.medicine.Name).ThenBy(x => x.batch.BatchNumber).Skip((page - 1) * size).Take(size).ToListAsync(ct);
+        return new(rows.Select(x => new NearExpiryBatchResponse(x.batch.Id, x.item.MedicineId, x.medicine.Name, x.batch.BatchNumber, x.batch.ExpiryDate, x.batch.ExpiryDate.DayNumber - today.DayNumber, x.batch.RemainingQuantity)).ToList(), page, size, total);
+    }
+
+    public async Task<PagedResult<BatchRemovalCandidateResponse>> GetBatchRemovalCandidatesAsync(int withinDays, int page, int size, CancellationToken ct)
+    {
+        (page, size) = Page(page, size);
+        withinDays = Math.Clamp(withinDays, 1, 365);
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var lastExpiryDate = today.AddDays(withinDays);
+        var query = store.StockBatches.AsNoTracking()
+            .Where(batch => batch.RemainingQuantity > 0 && batch.ExpiryDate <= lastExpiryDate)
+            .Join(store.InventoryItems, batch => batch.InventoryItemId, item => item.Id, (batch, item) => new { batch, item })
+            .Join(store.Medicines.Where(medicine => medicine.IsActive), row => row.item.MedicineId, medicine => medicine.Id, (row, medicine) => new { row.batch, row.item, medicine });
+        var total = await query.CountAsync(ct);
+        var rows = await query.OrderBy(x => x.batch.ExpiryDate).ThenBy(x => x.medicine.Name).ThenBy(x => x.batch.BatchNumber).Skip((page - 1) * size).Take(size).ToListAsync(ct);
+        return new(rows.Select(x => new BatchRemovalCandidateResponse(x.batch.Id, x.item.MedicineId, x.medicine.Name, x.batch.BatchNumber, x.batch.ExpiryDate, x.batch.ExpiryDate.DayNumber - today.DayNumber, x.batch.RemainingQuantity, x.batch.ExpiryDate < today)).ToList(), page, size, total);
+    }
+
+    public Task<BatchRemovalResponse> RemoveBatchAsync(Guid batchId, RemoveBatchRequest request, CancellationToken ct)
+    {
+        ValidateRemoval(request, out var eventId);
+        var sourceId = eventId.ToString();
+        var reason = request.Reason.Trim();
+        var removedBy = request.RemovedBy.Trim();
+        return store.ExecuteTransactionAsync(async token =>
+        {
+            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            var latestRemovableDate = today.AddDays(30);
+            var row = await store.StockBatches.Where(batch => batch.Id == batchId)
+                .Join(store.InventoryItems, batch => batch.InventoryItemId, item => item.Id, (batch, item) => new { batch, item })
+                .Join(store.Medicines.Where(medicine => medicine.IsActive), x => x.item.MedicineId, medicine => medicine.Id, (x, medicine) => new { x.batch, x.item, medicine })
+                .SingleOrDefaultAsync(token) ?? throw new NotFoundException("Stock batch was not found.");
+
+            if (row.batch.ExpiryDate > latestRemovableDate)
+                throw new ConflictException("Only expired batches or batches expiring within the next 30 days may be removed.");
+
+            if (!await store.TryBeginEventAsync(eventId, "inventory.batch-removed.v1", token))
+                return await BuildBatchRemovalResponseAsync(batchId, sourceId, reason, removedBy, token);
+
+            if (row.batch.RemainingQuantity == 0)
+            {
+                await store.SaveChangesAsync(token);
+                return new BatchRemovalResponse(row.batch.Id, row.item.MedicineId, row.medicine.Name, row.batch.BatchNumber, 0, reason, removedBy, DateTime.UtcNow, true);
+            }
+
+            var wasLow = row.item.IsLowStock;
+            var quantity = row.batch.RemainingQuantity;
+            row.batch.Consume(quantity);
+            var movement = row.item.ChangeStock(-quantity, StockMovementType.AdjustmentDecrease, "BatchRemoval", sourceId, row.batch.Id);
+            QueueTransitions(row.item, wasLow, "BatchRemoval", row.batch.BatchNumber);
+            store.AddOutbox("inventory.batch-removed.v1", row.batch.Id.ToString(), "inventory.batch-removed.v1", new { BatchId = row.batch.Id, row.item.MedicineId, MedicineName = row.medicine.Name, row.batch.BatchNumber, RemovedQuantity = quantity, Reason = reason, RemovedBy = removedBy, movement.OccurredAtUtc });
+            await store.SaveChangesAsync(token);
+            return new BatchRemovalResponse(row.batch.Id, row.item.MedicineId, row.medicine.Name, row.batch.BatchNumber, quantity, reason, removedBy, movement.OccurredAtUtc, false);
+        }, ct);
+    }
+
     public async Task<BatchResponse> GetBatchAsync(Guid id, CancellationToken ct)
     {
         var row = await store.StockBatches.AsNoTracking().Where(b => b.Id == id)
@@ -72,6 +140,63 @@ public sealed class InventoryService(ICatalogueInventoryStore store) : IInventor
         }
     }
 
+    public Task<CompletedSaleReceiptResponse> CompleteSaleAsync(CompleteSaleRequest request, CancellationToken ct)
+    {
+        ValidateSale(request);
+        return store.ExecuteTransactionAsync(async token =>
+    {
+        var saleReference = string.IsNullOrWhiteSpace(request.SaleReference)
+            ? request.SaleId.ToString()
+            : request.SaleReference.Trim();
+
+        if (!await store.TryBeginEventAsync(request.SaleId, "sales.sale-completed.v1", token))
+            return await BuildSaleReceiptAsync(request.SaleId, saleReference, token);
+
+        var completedAt = DateTime.UtcNow;
+        var receiptItems = new List<CompletedSaleReceiptItemResponse>();
+        foreach (var line in request.Items)
+        {
+            var item = await store.InventoryItems.Include(x => x.Batches).SingleOrDefaultAsync(x => x.MedicineId == line.MedicineId, token)
+                ?? throw new NotFoundException($"Inventory for medicine {line.MedicineId} was not found.");
+            var medicine = await store.Medicines.Where(x => x.Id == line.MedicineId && x.IsActive)
+                .Select(x => new { x.Name, x.UnitPrice }).SingleOrDefaultAsync(token)
+                ?? throw new NotFoundException($"Medicine {line.MedicineId} was not found.");
+            var medicineName = medicine.Name;            var wasLow = item.IsLowStock;
+            var remaining = line.Quantity;
+            var allocations = new List<CompletedSaleBatchAllocationResponse>();
+
+            foreach (var batch in item.Batches.Where(x => x.RemainingQuantity > 0 && x.ExpiryDate >= DateOnly.FromDateTime(DateTime.UtcNow)).OrderBy(x => x.ExpiryDate).ThenBy(x => x.ReceivedAtUtc).ThenBy(x => x.Id))
+            {
+                if (remaining == 0) break;
+                var quantity = Math.Min(remaining, batch.RemainingQuantity);
+                batch.Consume(quantity);
+                var movement = item.ChangeStock(-quantity, StockMovementType.SaleDispensed, "Sale", saleReference, batch.Id, medicine.UnitPrice, request.PharmacistUsername?.Trim());
+                allocations.Add(new CompletedSaleBatchAllocationResponse(batch.Id, batch.BatchNumber, batch.ExpiryDate, quantity, movement.QuantityBefore, movement.QuantityAfter));
+                remaining -= quantity;
+            }
+
+            if (remaining > 0)
+            {
+                var hasExpiredStock = item.Batches.Any(batch => batch.RemainingQuantity > 0 && batch.ExpiryDate < DateOnly.FromDateTime(DateTime.UtcNow));
+                throw new ConflictException(hasExpiredStock ? "All available stock is expired." : "Insufficient stock");
+            }
+
+            QueueTransitions(item, wasLow, "Sale", saleReference);
+            receiptItems.Add(new CompletedSaleReceiptItemResponse(line.MedicineId, medicineName, line.Quantity, medicine.UnitPrice, medicine.UnitPrice * line.Quantity, allocations));
+        }
+
+        await store.SaveChangesAsync(token);
+        return new CompletedSaleReceiptResponse(request.SaleId, saleReference, completedAt, request.PharmacistUsername?.Trim(), receiptItems, false, receiptItems.Sum(x => x.LineTotal));
+    }, ct);
+    }
+
+    public async Task<CompletedSaleReceiptResponse> GetSaleReceiptAsync(string saleReference, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(saleReference))
+            throw new ValidationException(new Dictionary<string, string[]> { ["saleReference"] = ["A sale reference is required."] });
+
+        return await BuildSaleReceiptAsync(Guid.Empty, saleReference.Trim(), ct);
+    }
     public async Task<PagedResult<MovementResponse>> GetMovementsAsync(Guid medicineId, int page, int size, CancellationToken ct)
     {
         (page, size) = Page(page, size);
@@ -106,52 +231,6 @@ public sealed class InventoryService(ICatalogueInventoryStore store) : IInventor
         var total = await query.CountAsync(ct);
         var rows = await query.OrderByDescending(x => x.movement.OccurredAtUtc).Skip((page - 1) * size).Take(size).ToListAsync(ct);
         return new(rows.Select(x => new SaleStockIssueResponse(x.movement.Id, x.item.MedicineId, x.medicine.Name, x.batch.BatchNumber, x.batch.ExpiryDate, -x.movement.QuantityDelta, x.movement.QuantityBefore, x.movement.QuantityAfter, x.movement.SourceId, x.movement.OccurredAtUtc)).ToList(), page, size, total);
-    }
-
-    public Task<CompletedSaleResponse> CompleteSaleAsync(CompleteSaleRequest request, CancellationToken ct)
-    {
-        if (request is null) throw Invalid("sale", "Sale is required.");
-        if (request.SaleId == Guid.Empty) throw Invalid("saleId", "Sale ID is required.");
-        if (string.IsNullOrWhiteSpace(request.SaleReference) || request.SaleReference.Trim().Length > StockMovement.MaxSourceIdLength)
-            throw Invalid("saleReference", $"Sale reference must be 1–{StockMovement.MaxSourceIdLength} characters.");
-        if (request.Items is null || request.Items.Count == 0) throw Invalid("items", "At least one medicine is required.");
-        if (request.Items.Any(x => x.MedicineId == Guid.Empty || x.Quantity <= 0))
-            throw Invalid("items", "Every item needs a medicine and a positive quantity.");
-        if (request.Items.Select(x => x.MedicineId).Distinct().Count() != request.Items.Count)
-            throw Invalid("items", "Each medicine may appear only once in a sale.");
-
-        var saleReference = request.SaleReference.Trim();
-        return store.ExecuteTransactionAsync(async token =>
-        {
-            var alreadyProcessed = await store.HasProcessedEventAsync(request.SaleId, token);
-            if (!alreadyProcessed)
-            {
-                if (await store.StockMovements.AnyAsync(x => x.Type == StockMovementType.SaleDispensed && x.SourceId == saleReference, token))
-                    throw new ConflictException("Sale reference was already used. Use the original sale ID to retry.");
-                var lines = request.Items.Select(x => new ExternalStockLine(x.MedicineId, x.Quantity, null, null, null)).ToList();
-                var message = new ExternalStockEvent(request.SaleId, saleReference, DateTime.UtcNow, lines);
-                alreadyProcessed = !await ApplySaleAsync(message, token);
-            }
-
-            var rows = await store.StockMovements.AsNoTracking()
-                .Where(x => x.Type == StockMovementType.SaleDispensed && x.SourceId == saleReference)
-                .Join(store.InventoryItems, movement => movement.InventoryItemId, item => item.Id, (movement, item) => new { movement, item })
-                .Join(store.Medicines, row => row.item.MedicineId, medicine => medicine.Id, (row, medicine) => new { row.movement, row.item, medicine })
-                .Join(store.StockBatches, row => row.movement.StockBatchId, batch => batch.Id, (row, batch) => new { row.movement, row.item, row.medicine, batch })
-                .ToListAsync(token);
-            if (rows.Count == 0) throw new ConflictException("Sale ID and reference do not match an existing completed sale.");
-
-            var items = request.Items.Select(line =>
-            {
-                var allocations = rows.Where(x => x.item.MedicineId == line.MedicineId).ToList();
-                if (allocations.Count == 0 || allocations.Sum(x => -x.movement.QuantityDelta) != line.Quantity)
-                    throw new ConflictException("Sale ID and items do not match an existing completed sale.");
-                var medicine = allocations[0].medicine;
-                var batches = allocations.Select(x => new CompletedSaleBatch(x.batch.Id, x.batch.BatchNumber, x.batch.ExpiryDate, -x.movement.QuantityDelta)).ToList();
-                return new CompletedSaleItem(line.MedicineId, medicine.Name, line.Quantity, medicine.UnitPrice, medicine.UnitPrice * line.Quantity, batches);
-            }).ToList();
-            return new CompletedSaleResponse(request.SaleId, saleReference, rows.Max(x => x.movement.OccurredAtUtc), alreadyProcessed, items, items.Sum(x => x.LineTotal));
-        }, ct);
     }
 
     public Task<bool> ApplyPurchaseAsync(ExternalStockEvent message, CancellationToken ct) => Apply(message, "purchasing.purchase-recorded.v1", true, ct);
@@ -238,6 +317,93 @@ public sealed class InventoryService(ICatalogueInventoryStore store) : IInventor
         if (errors.Count > 0) throw new ValidationException(errors);
     }
 
+    private static void ValidateSale(CompleteSaleRequest r)
+    {
+        var errors = new Dictionary<string, string[]>();
+        if (r.SaleId == Guid.Empty) errors["saleId"] = ["Sale ID is required."];
+        if ((r.SaleReference?.Trim().Length ?? 0) > StockMovement.MaxSourceIdLength) errors["saleReference"] = [$"Sale reference cannot exceed {StockMovement.MaxSourceIdLength} characters."];
+        if (r.Items is null || r.Items.Count == 0) errors["items"] = ["At least one sale item is required."];
+        else
+        {
+            for (var index = 0; index < r.Items.Count; index++)
+            {
+                var item = r.Items[index];
+                var prefix = $"items[{index}]";
+                if (item.MedicineId == Guid.Empty) errors[$"{prefix}.medicineId"] = ["Medicine is required."];
+                if (item.Quantity <= 0) errors[$"{prefix}.quantity"] = ["Quantity must be greater than zero."];
+            }
+
+            if (r.Items.Select(x => x.MedicineId).Distinct().Count() != r.Items.Count)
+                errors["items"] = ["Each medicine may appear only once per sale."];
+        }
+        if (errors.Count > 0) throw new ValidationException(errors);
+    }
+
+    private static void ValidateRemoval(RemoveBatchRequest r, out Guid eventId)
+    {
+        eventId = Guid.Empty;
+        var errors = new Dictionary<string, string[]>();
+        if (string.IsNullOrWhiteSpace(r.IdempotencyKey) || !Guid.TryParse(r.IdempotencyKey.Trim(), out eventId))
+            errors["idempotencyKey"] = ["A valid idempotency key is required."];
+        if (string.IsNullOrWhiteSpace(r.Reason))
+            errors["reason"] = ["Choose or enter a reason for removal."];
+        else if (r.Reason.Trim().Length > 500)
+            errors["reason"] = ["The removal reason must be 500 characters or fewer."];
+        if (string.IsNullOrWhiteSpace(r.RemovedBy))
+            errors["removedBy"] = ["The Inventory Manager identity is required."];
+        else if (r.RemovedBy.Trim().Length > 150)
+            errors["removedBy"] = ["The Inventory Manager identity must be 150 characters or fewer."];
+        if (errors.Count > 0) throw new ValidationException(errors);
+    }
+
+    private async Task<BatchRemovalResponse> BuildBatchRemovalResponseAsync(Guid batchId, string sourceId, string reason, string removedBy, CancellationToken ct)
+    {
+        var movementRow = await store.StockMovements.AsNoTracking()
+            .Where(movement => movement.StockBatchId == batchId && movement.SourceType == "BatchRemoval" && movement.SourceId == sourceId)
+            .Join(store.InventoryItems, movement => movement.InventoryItemId, item => item.Id, (movement, item) => new { movement, item })
+            .Join(store.Medicines, row => row.item.MedicineId, medicine => medicine.Id, (row, medicine) => new { row.movement, row.item, medicine })
+            .Join(store.StockBatches, row => row.movement.StockBatchId, batch => batch.Id, (row, batch) => new { row.movement, row.item, row.medicine, batch })
+            .SingleOrDefaultAsync(ct);
+
+        if (movementRow is not null)
+            return new BatchRemovalResponse(movementRow.batch.Id, movementRow.item.MedicineId, movementRow.medicine.Name, movementRow.batch.BatchNumber, -movementRow.movement.QuantityDelta, reason, removedBy, movementRow.movement.OccurredAtUtc, true);
+
+        var batchRow = await store.StockBatches.AsNoTracking().Where(batch => batch.Id == batchId)
+            .Join(store.InventoryItems, batch => batch.InventoryItemId, item => item.Id, (batch, item) => new { batch, item })
+            .Join(store.Medicines, row => row.item.MedicineId, medicine => medicine.Id, (row, medicine) => new { row.batch, row.item, medicine })
+            .SingleOrDefaultAsync(ct) ?? throw new NotFoundException("Stock batch was not found.");
+
+        if (batchRow.batch.RemainingQuantity == 0)
+            return new BatchRemovalResponse(batchRow.batch.Id, batchRow.item.MedicineId, batchRow.medicine.Name, batchRow.batch.BatchNumber, 0, reason, removedBy, DateTime.UtcNow, true);
+
+        throw new ConflictException("This removal request has already been processed for another batch. Refresh removal candidates and try again.");
+    }
+
+    private async Task<CompletedSaleReceiptResponse> BuildSaleReceiptAsync(Guid saleId, string saleReference, CancellationToken ct)
+    {
+        var rows = await store.StockMovements.AsNoTracking()
+            .Where(movement => movement.Type == StockMovementType.SaleDispensed && movement.SourceId == saleReference)
+            .Join(store.InventoryItems, movement => movement.InventoryItemId, item => item.Id, (movement, item) => new { movement, item })
+            .Join(store.Medicines, row => row.item.MedicineId, medicine => medicine.Id, (row, medicine) => new { row.movement, row.item, medicine })
+            .Join(store.StockBatches, row => row.movement.StockBatchId, batch => batch.Id, (row, batch) => new { row.movement, row.item, row.medicine, batch })
+            .OrderBy(x => x.movement.OccurredAtUtc)
+            .ToListAsync(ct);
+
+        if (rows.Count == 0)
+            throw new ConflictException("This sale was already processed, but its receipt could not be rebuilt.");
+
+        var items = rows.GroupBy(x => new { x.item.MedicineId, x.medicine.Name })
+            .Select(group =>
+            {
+                var quantity = group.Sum(x => -x.movement.QuantityDelta);
+                var unitPrice = group.Select(x => x.movement.UnitPrice).FirstOrDefault(x => x.HasValue) ?? group.First().medicine.UnitPrice;
+                return new CompletedSaleReceiptItemResponse(group.Key.MedicineId, group.Key.Name, quantity, unitPrice, unitPrice * quantity,
+                    group.Select(x => new CompletedSaleBatchAllocationResponse(x.batch.Id, x.batch.BatchNumber, x.batch.ExpiryDate, -x.movement.QuantityDelta, x.movement.QuantityBefore, x.movement.QuantityAfter)).ToList());
+            })
+            .ToList();
+        var pharmacistUsername = rows.Select(x => x.movement.PharmacistUsername).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+        return new CompletedSaleReceiptResponse(saleId, saleReference, rows.Max(x => x.movement.OccurredAtUtc), pharmacistUsername, items, true, items.Sum(x => x.LineTotal));
+    }
     private void QueueTransitions(InventoryItem i, bool wasLow, string reason, string source)
     {
         store.AddOutbox("inventory.stock-changed.v1", i.MedicineId.ToString(), "inventory.stock-changed.v1", new { i.MedicineId, i.QuantityOnHand, reason, source, occurredAtUtc = DateTime.UtcNow });

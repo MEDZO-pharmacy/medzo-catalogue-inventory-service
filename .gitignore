@@ -9,3 +9,6 @@ frontend/.env
 *.db
 *.db-shm
 *.db-wal
+
+# Local runtime data
+.appdata/

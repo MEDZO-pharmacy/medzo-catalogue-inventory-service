@@ -40,43 +40,32 @@ npm run dev
 Configure `VITE_AUTH_API_URL` and `VITE_CATALOGUE_INVENTORY_API_URL` in `frontend/.env`.
 ## CI/CD deployment
 
-The GitHub Actions workflow at `.github/workflows/deploy-azure-app-service.yml`
-builds and tests every pull request targeting `dev`. A push to `dev` builds the
-container and deploys it only when the repository variable `DEPLOY_ENABLED` is
-set to `true`.
+The workflow tests the `dev` branch, publishes an immutable GHCR image, and
+deploys `medzo-catalogue-service` in `rg-MEDZO-NEW` using Azure OIDC. See the
+[Azure GitHub OIDC setup](https://github.com/MEDZO-pharmacy/medzo-user-auth-service/blob/main/docs/AZURE_GITHUB_OIDC.md)
+for the one-time Entra application and federated credential setup. Add these as
+Actions **Variables** in this repository:
 
-Before enabling deployment, configure the following in this repository:
+| Variable | Value |
+| --- | --- |
+| `AZURE_CLIENT_ID` | Azure app registration application (client) ID |
+| `AZURE_TENANT_ID` | Azure tenant ID |
+| `AZURE_SUBSCRIPTION_ID` | `f53c5182-c196-4e12-b31f-a6e5bfa6b5fd` |
 
-| Type | Name | Value |
-| --- | --- | --- |
-| Variable | `AZURE_REGISTRY_NAME` | Azure Container Registry resource name, without `.azurecr.io` |
-| Variable | `AZURE_WEBAPP_NAME` | Azure App Service name for this service |
-| Variable | `CATALOGUE_HEALTH_URL` | HTTPS service origin, without `/health` |
-| Variable | `DEPLOY_ENABLED` | `true` after all configuration below is complete |
-| Secret | `REGISTRY_USERNAME` | Azure Container Registry admin username |
-| Secret | `REGISTRY_PASSWORD` | Azure Container Registry admin password |
-| Secret | `AZURE_WEBAPP_PUBLISH_PROFILE` | Downloaded publish profile for the catalogue App Service |
-| Secret | `CATALOGUE_DATABASE_CONNECTION` | Azure SQL connection string for `medzo_inventory_db` |
-
-Create a GitHub `production` environment. This workflow follows the auth service
-pattern: it signs in to Azure Container Registry with the registry admin
-credentials and deploys with the App Service publish profile. The App Service
-must be configured to pull images from the same registry.
-
-Configure these App Service application settings separately. They are runtime
-configuration and must not be committed to Git:
+The Container App must have these runtime settings, configured in Azure rather
+than committed to Git:
 
 ```text
-ConnectionStrings__CatalogueInventory=<Azure SQL connection string>
-Jwt__Secret=<same signing secret used by medzo-user-auth-service>
+ConnectionStrings__CatalogueInventory=<secret reference to catalogue Azure SQL>
+Jwt__Secret=<secret reference to the same signing key used by Auth>
 Jwt__Issuer=MedzoAuthService
 Jwt__Audience=MedzoClient
-Cors__AllowedOrigins__0=<frontend HTTPS origin>
+Cors__AllowedOrigins__0=https://brave-forest-045498500.3.azurestaticapps.net
 Kafka__Enabled=false
+Database__MigrateOnStartup=true
 ASPNETCORE_ENVIRONMENT=Production
 ```
 
-The workflow applies pending Entity Framework migrations before deploying the
-container. It uses `CATALOGUE_DATABASE_CONNECTION` only in the protected
-deployment job. Do not enable the deployment until the Azure SQL server is
-running and the GitHub-hosted runner can reach it through its firewall rules.
+The app applies pending migrations before it starts accepting requests. Keep
+the Container App at one maximum replica while startup migrations are enabled.
+The workflow verifies `/health` after deployment.
