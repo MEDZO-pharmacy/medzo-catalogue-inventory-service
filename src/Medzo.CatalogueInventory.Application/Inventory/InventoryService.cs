@@ -156,9 +156,10 @@ public sealed class InventoryService(ICatalogueInventoryStore store) : IInventor
         {
             var item = await store.InventoryItems.Include(x => x.Batches).SingleOrDefaultAsync(x => x.MedicineId == line.MedicineId, token)
                 ?? throw new NotFoundException($"Inventory for medicine {line.MedicineId} was not found.");
-            var medicineName = await store.Medicines.Where(x => x.Id == line.MedicineId && x.IsActive).Select(x => x.Name).SingleOrDefaultAsync(token)
+            var medicine = await store.Medicines.Where(x => x.Id == line.MedicineId && x.IsActive)
+                .Select(x => new { x.Name, x.UnitPrice }).SingleOrDefaultAsync(token)
                 ?? throw new NotFoundException($"Medicine {line.MedicineId} was not found.");
-            var wasLow = item.IsLowStock;
+            var medicineName = medicine.Name;            var wasLow = item.IsLowStock;
             var remaining = line.Quantity;
             var allocations = new List<CompletedSaleBatchAllocationResponse>();
 
@@ -167,7 +168,7 @@ public sealed class InventoryService(ICatalogueInventoryStore store) : IInventor
                 if (remaining == 0) break;
                 var quantity = Math.Min(remaining, batch.RemainingQuantity);
                 batch.Consume(quantity);
-                var movement = item.ChangeStock(-quantity, StockMovementType.SaleDispensed, "Sale", saleReference, batch.Id);
+                var movement = item.ChangeStock(-quantity, StockMovementType.SaleDispensed, "Sale", saleReference, batch.Id, medicine.UnitPrice, request.PharmacistUsername?.Trim());
                 allocations.Add(new CompletedSaleBatchAllocationResponse(batch.Id, batch.BatchNumber, batch.ExpiryDate, quantity, movement.QuantityBefore, movement.QuantityAfter));
                 remaining -= quantity;
             }
@@ -176,13 +177,20 @@ public sealed class InventoryService(ICatalogueInventoryStore store) : IInventor
                 throw new ConflictException("Insufficient stock");
 
             QueueTransitions(item, wasLow, "Sale", saleReference);
-            receiptItems.Add(new CompletedSaleReceiptItemResponse(line.MedicineId, medicineName, line.Quantity, allocations));
+            receiptItems.Add(new CompletedSaleReceiptItemResponse(line.MedicineId, medicineName, line.Quantity, medicine.UnitPrice, medicine.UnitPrice * line.Quantity, allocations));
         }
 
         await store.SaveChangesAsync(token);
-        return new CompletedSaleReceiptResponse(request.SaleId, saleReference, completedAt, receiptItems);
+        return new CompletedSaleReceiptResponse(request.SaleId, saleReference, completedAt, request.PharmacistUsername?.Trim(), receiptItems);
     }, ct);
 
+    public async Task<CompletedSaleReceiptResponse> GetSaleReceiptAsync(string saleReference, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(saleReference))
+            throw new ValidationException(new Dictionary<string, string[]> { ["saleReference"] = ["A sale reference is required."] });
+
+        return await BuildSaleReceiptAsync(Guid.Empty, saleReference.Trim(), ct);
+    }
     public async Task<PagedResult<MovementResponse>> GetMovementsAsync(Guid medicineId, int page, int size, CancellationToken ct)
     {
         (page, size) = Page(page, size);
@@ -373,16 +381,17 @@ public sealed class InventoryService(ICatalogueInventoryStore store) : IInventor
             throw new ConflictException("This sale was already processed, but its receipt could not be rebuilt.");
 
         var items = rows.GroupBy(x => new { x.item.MedicineId, x.medicine.Name })
-            .Select(group => new CompletedSaleReceiptItemResponse(
-                group.Key.MedicineId,
-                group.Key.Name,
-                group.Sum(x => -x.movement.QuantityDelta),
-                group.Select(x => new CompletedSaleBatchAllocationResponse(x.batch.Id, x.batch.BatchNumber, x.batch.ExpiryDate, -x.movement.QuantityDelta, x.movement.QuantityBefore, x.movement.QuantityAfter)).ToList()))
+            .Select(group =>
+            {
+                var quantity = group.Sum(x => -x.movement.QuantityDelta);
+                var unitPrice = group.Select(x => x.movement.UnitPrice).FirstOrDefault(x => x.HasValue) ?? group.First().medicine.UnitPrice;
+                return new CompletedSaleReceiptItemResponse(group.Key.MedicineId, group.Key.Name, quantity, unitPrice, unitPrice * quantity,
+                    group.Select(x => new CompletedSaleBatchAllocationResponse(x.batch.Id, x.batch.BatchNumber, x.batch.ExpiryDate, -x.movement.QuantityDelta, x.movement.QuantityBefore, x.movement.QuantityAfter)).ToList());
+            })
             .ToList();
-
-        return new CompletedSaleReceiptResponse(saleId, saleReference, rows.Max(x => x.movement.OccurredAtUtc), items);
+        var pharmacistUsername = rows.Select(x => x.movement.PharmacistUsername).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+        return new CompletedSaleReceiptResponse(saleId, saleReference, rows.Max(x => x.movement.OccurredAtUtc), pharmacistUsername, items);
     }
-
     private void QueueTransitions(InventoryItem i, bool wasLow, string reason, string source)
     {
         store.AddOutbox("inventory.stock-changed.v1", i.MedicineId.ToString(), "inventory.stock-changed.v1", new { i.MedicineId, i.QuantityOnHand, reason, source, occurredAtUtc = DateTime.UtcNow });
