@@ -83,6 +83,7 @@ if (string.Equals(builder.Configuration["Database:Provider"], "Sqlite", StringCo
 {
     await using var scope = app.Services.CreateAsyncScope();
     var database = scope.ServiceProvider.GetRequiredService<CatalogueInventoryDbContext>();
+    await database.Database.EnsureCreatedAsync();
     await EnsureSqliteReceiptColumnsAsync(database);
 }
 if (app.Environment.IsDevelopment() && builder.Configuration.GetValue<bool>("SeedDemoData:Enabled"))
