@@ -1,90 +1,95 @@
-name: Catalogue service CI and Azure deployment
+name: Test and Deploy Catalogue and Inventory Service
 
 on:
-  pull_request:
-    branches: [dev]
   push:
     branches: [dev]
+    paths:
+      - '.dockerignore'
+      - '.github/workflows/deploy-azure-app-service.yml'
+      - 'docker/**'
+      - 'src/**'
+      - 'tests/**'
+      - 'Medzo.CatalogueInventory.slnx'
+      - 'dotnet-tools.json'
   workflow_dispatch:
+
+concurrency:
+  group: medzo-catalogue-production
+  cancel-in-progress: true
 
 permissions:
   contents: read
+  packages: write
+  id-token: write
 
 env:
-  IMAGE_NAME: medzo-catalogue-inventory-service
+  REGISTRY: ghcr.io
+  IMAGE_NAME: medzo-pharmacy/medzo-catalogue-inventory-service
+  CONTAINER_APP_NAME: medzo-catalogue-service
+  RESOURCE_GROUP: rg-MEDZO-NEW
 
 jobs:
-  test:
+  test-build-and-deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.x'
-      - name: Restore
-        run: dotnet restore Medzo.CatalogueInventory.slnx
-      - name: Build
-        run: dotnet build src/Medzo.CatalogueInventory.Api/Medzo.CatalogueInventory.Api.csproj -c Release --no-restore
-      - name: Test
-        run: dotnet test tests/Medzo.CatalogueInventory.UnitTests/Medzo.CatalogueInventory.UnitTests.csproj -c Release --no-restore && dotnet test tests/Medzo.CatalogueInventory.IntegrationTests/Medzo.CatalogueInventory.IntegrationTests.csproj -c Release --no-restore
-      - name: Build container
-        run: docker build -f docker/Dockerfile -t ${{ env.IMAGE_NAME }}:ci .
 
-  deploy:
-    needs: test
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/dev' && vars.DEPLOY_ENABLED == 'true'
-    runs-on: ubuntu-latest
-    environment: production
-    env:
-      REGISTRY_NAME: ${{ vars.AZURE_REGISTRY_NAME }}
-      WEBAPP_NAME: ${{ vars.AZURE_WEBAPP_NAME }}
-      HEALTH_URL: ${{ vars.CATALOGUE_HEALTH_URL }}
-      DATABASE_CONNECTION: ${{ secrets.CATALOGUE_DATABASE_CONNECTION }}
-    steps:
-      - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.0.x'
-      - name: Restore deployment dependencies
-        run: dotnet restore Medzo.CatalogueInventory.slnx
-      - name: Validate deployment configuration
-        shell: bash
+          dotnet-version: 10.0.x
+
+      - name: Restore and test
         run: |
-          set -euo pipefail
-          : "${REGISTRY_NAME:?Set AZURE_REGISTRY_NAME}"
-          : "${WEBAPP_NAME:?Set AZURE_WEBAPP_NAME}"
-          : "${HEALTH_URL:?Set CATALOGUE_HEALTH_URL}"
-          : "${DATABASE_CONNECTION:?Set CATALOGUE_DATABASE_CONNECTION}"
-          if [[ "$DATABASE_CONNECTION" =~ (CHANGE_ME|YOUR_|\{your_password\}) ]]; then
-            echo "::error::CATALOGUE_DATABASE_CONNECTION contains a placeholder. Replace {your_password} with the real SQL password."
-            exit 1
-          fi
-      - name: Log in to Azure Container Registry
-        uses: azure/docker-login@v2
+          dotnet restore Medzo.CatalogueInventory.slnx
+          dotnet test tests/Medzo.CatalogueInventory.UnitTests/Medzo.CatalogueInventory.UnitTests.csproj --configuration Release --no-restore
+          dotnet test tests/Medzo.CatalogueInventory.IntegrationTests/Medzo.CatalogueInventory.IntegrationTests.csproj --configuration Release --no-restore
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
         with:
-          login-server: ${{ vars.AZURE_REGISTRY_NAME }}.azurecr.io
-          username: ${{ secrets.REGISTRY_USERNAME }}
-          password: ${{ secrets.REGISTRY_PASSWORD }}
-      - name: Apply Azure SQL migrations
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish immutable image
+        run: |
+          docker build -f docker/Dockerfile \
+            -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest .
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Validate Azure OpenID Connect variables
+        shell: bash
         env:
-          ConnectionStrings__CatalogueInventory: ${{ secrets.CATALOGUE_DATABASE_CONNECTION }}
-        run: |
-          dotnet tool restore
-          dotnet tool run dotnet-ef database update --project src/Medzo.CatalogueInventory.Infrastructure --startup-project src/Medzo.CatalogueInventory.Api
-      - name: Build and push container
-        shell: bash
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
         run: |
           set -euo pipefail
-          image="${REGISTRY_NAME}.azurecr.io/${IMAGE_NAME}:${GITHUB_SHA}"
-          docker build -f docker/Dockerfile -t "$image" .
-          docker push "$image"
-          echo "IMAGE=$image" >> "$GITHUB_ENV"
-      - name: Deploy container
-        uses: azure/webapps-deploy@v3
+          : "${AZURE_CLIENT_ID:?Add repository Actions variable AZURE_CLIENT_ID}"
+          : "${AZURE_TENANT_ID:?Add repository Actions variable AZURE_TENANT_ID}"
+          : "${AZURE_SUBSCRIPTION_ID:?Add repository Actions variable AZURE_SUBSCRIPTION_ID}"
+
+      - name: Log in to Azure using OpenID Connect
+        uses: azure/login@v2
         with:
-          app-name: ${{ vars.AZURE_WEBAPP_NAME }}
-          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
-          images: ${{ env.IMAGE }}
-      - name: Verify service health
-        shell: bash
-        run: curl --fail --retry 12 --retry-all-errors --retry-delay 10 --max-time 20 "${HEALTH_URL%/}/health"
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy image to Azure Container Apps
+        uses: azure/container-apps-deploy-action@v1
+        with:
+          containerAppName: ${{ env.CONTAINER_APP_NAME }}
+          resourceGroup: ${{ env.RESOURCE_GROUP }}
+          imageToDeploy: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          registryUrl: ${{ env.REGISTRY }}
+
+      - name: Verify deployed health endpoint
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            fqdn=$(az containerapp show --name "${{ env.CONTAINER_APP_NAME }}" --resource-group "${{ env.RESOURCE_GROUP }}" --query 'properties.configuration.ingress.fqdn' --output tsv)
+            test -n "$fqdn"
+            curl --fail --retry 6 --retry-all-errors --retry-delay 10 "https://$fqdn/health"
