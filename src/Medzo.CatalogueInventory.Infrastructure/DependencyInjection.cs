@@ -42,18 +42,33 @@ public static class DependencyInjection
 
         if (bool.TryParse(configuration["Kafka:Enabled"], out var kafkaEnabled) && kafkaEnabled)
         {
-            var brokers = configuration["Kafka:BootstrapServers"] ?? "localhost:9092";
+            var producerConfig = new ProducerConfig
+            {
+                BootstrapServers = configuration["Kafka:BootstrapServers"] ?? "localhost:9092",
+                EnableIdempotence = !bool.TryParse(configuration["Kafka:EnableIdempotence"], out var enableIdempotence) || enableIdempotence,
+                Acks = Acks.All
+            };
+            ConfigureKafkaSecurity(producerConfig, configuration);
             services.AddSingleton<IProducer<string, string>>(_ =>
-                new ProducerBuilder<string, string>(new ProducerConfig
-                {
-                    BootstrapServers = brokers,
-                    EnableIdempotence = true,
-                    Acks = Acks.All
-                }).Build());
+                new ProducerBuilder<string, string>(producerConfig).Build());
             services.AddHostedService<OutboxPublisher>();
             services.AddHostedService<StockEventConsumer>();
         }
 
         return services;
+    }
+
+    internal static void ConfigureKafkaSecurity(ClientConfig config, IConfiguration configuration)
+    {
+        if (Enum.TryParse<SecurityProtocol>(configuration["Kafka:SecurityProtocol"], true, out var securityProtocol))
+            config.SecurityProtocol = securityProtocol;
+
+        if (Enum.TryParse<SaslMechanism>(configuration["Kafka:SaslMechanism"], true, out var saslMechanism))
+            config.SaslMechanism = saslMechanism;
+
+        var username = configuration["Kafka:SaslUsername"];
+        var password = configuration["Kafka:SaslPassword"];
+        if (!string.IsNullOrWhiteSpace(username)) config.SaslUsername = username;
+        if (!string.IsNullOrWhiteSpace(password)) config.SaslPassword = password;
     }
 }
