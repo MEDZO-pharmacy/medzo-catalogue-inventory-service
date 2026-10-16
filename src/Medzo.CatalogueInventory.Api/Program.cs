@@ -11,6 +11,7 @@ using Medzo.CatalogueInventory.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using Microsoft.OpenApi.Models;
 
 LocalEnvironmentFile.LoadFromCurrentDirectory();
 
@@ -18,6 +19,23 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddApplicationInsightsTelemetry();
 builder.Services.AddControllers()
     .AddJsonOptions(options => options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen(options =>
+{
+    options.SwaggerDoc("v1", new OpenApiInfo { Title = "Medzo Catalogue and Inventory API", Version = "v1" });
+    options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Description = "Enter a Medzo JWT bearer token.", Name = "Authorization", In = ParameterLocation.Header,
+        Type = SecuritySchemeType.Http, Scheme = "bearer", BearerFormat = "JWT"
+    });
+    options.AddSecurityRequirement(new OpenApiSecurityRequirement
+    {
+        [new OpenApiSecurityScheme
+        {
+            Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = "Bearer" }
+        }] = Array.Empty<string>()
+    });
+});
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<ApiExceptionHandler>();
 builder.Services.AddHealthChecks();
@@ -91,6 +109,8 @@ if (app.Environment.IsDevelopment() && builder.Configuration.GetValue<bool>("See
 
 app.UseExceptionHandler();
 app.UseCors("Frontend");
+app.UseSwagger();
+app.UseSwaggerUI(options => options.SwaggerEndpoint("/swagger/v1/swagger.json", "Medzo Catalogue and Inventory API v1"));
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
