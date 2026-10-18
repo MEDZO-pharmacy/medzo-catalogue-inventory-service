@@ -1,0 +1,5 @@
+{
+  "name": "Catalogue and Inventory",
+  "sourceProject": "src/Medzo.CatalogueInventory.Api/Medzo.CatalogueInventory.Api.csproj",
+  "testProject": "tests/Medzo.CatalogueInventory.UnitTests/Medzo.CatalogueInventory.UnitTests.csproj"
+}

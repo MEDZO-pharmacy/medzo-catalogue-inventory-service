@@ -12,3 +12,6 @@ frontend/.env
 
 # Local runtime data
 .appdata/
+
+# Generated quality metrics and analyzer reports
+.quality-output/
