@@ -58,6 +58,17 @@ jobs:
         working-directory: tests/Medzo.CatalogueInventory.UnitTests
         run: dotnet stryker --skip-version-check
 
+      - name: Add mutation summary
+        if: always()
+        shell: bash
+        run: |
+          report=$(find tests/Medzo.CatalogueInventory.UnitTests/StrykerOutput -type f -name mutation-report.md | sort | tail -n 1)
+          if [ -n "$report" ]; then
+            cat "$report" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Mutation summary was not generated." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Upload HTML, JSON, and Markdown mutation reports
         if: always()
         uses: actions/upload-artifact@v4
