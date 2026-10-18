@@ -1,0 +1,71 @@
+name: Catalogue Mutation Testing
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - catalogue-mutation-testing
+    paths:
+      - 'src/Medzo.CatalogueInventory.Domain/**'
+      - 'tests/Medzo.CatalogueInventory.UnitTests/**'
+      - 'dotnet-tools.json'
+      - 'Directory.Build.props'
+      - 'Medzo.CatalogueInventory.slnx'
+      - '.github/workflows/catalogue-mutation-testing.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'src/Medzo.CatalogueInventory.Domain/**'
+      - 'tests/Medzo.CatalogueInventory.UnitTests/**'
+      - 'dotnet-tools.json'
+      - 'Directory.Build.props'
+      - 'Medzo.CatalogueInventory.slnx'
+      - '.github/workflows/catalogue-mutation-testing.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: catalogue-mutation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mutation-test:
+    name: Stryker.NET quality gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore local tools and packages
+        run: |
+          dotnet tool restore
+          dotnet restore Medzo.CatalogueInventory.slnx
+
+      - name: Run catalogue and inventory unit tests
+        run: dotnet test tests/Medzo.CatalogueInventory.UnitTests/Medzo.CatalogueInventory.UnitTests.csproj --configuration Release --no-restore
+
+      - name: Run Stryker.NET mutation tests
+        working-directory: tests/Medzo.CatalogueInventory.UnitTests
+        run: dotnet stryker --skip-version-check
+
+      - name: Upload HTML, JSON, and Markdown mutation reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: catalogue-mutation-report-${{ github.run_number }}
+          path: |
+            tests/Medzo.CatalogueInventory.UnitTests/StrykerOutput/**/reports/mutation-report.html
+            tests/Medzo.CatalogueInventory.UnitTests/StrykerOutput/**/reports/mutation-report.json
+            tests/Medzo.CatalogueInventory.UnitTests/StrykerOutput/**/reports/mutation-report.md
+          if-no-files-found: error
+          retention-days: 14

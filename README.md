@@ -38,6 +38,70 @@ npm run dev
 ```
 
 Configure `VITE_AUTH_API_URL` and `VITE_CATALOGUE_INVENTORY_API_URL` in `frontend/.env`.
+
+## Mutation testing
+
+**Owner:** IT24101508
+
+**Tool:** Stryker.NET 5 with xUnit v3 and Microsoft Testing Platform
+
+Mutation testing introduces controlled faults into production code and runs the relevant tests.
+A killed mutant proves that the suite detects the changed behavior. A surviving mutant identifies
+a weak assertion, missing case, or behaviorally equivalent change.
+
+The configuration at `tests/Medzo.CatalogueInventory.UnitTests/stryker-config.json` targets three
+deterministic domain aggregates:
+
+- `Catalogue/Medicine.cs` for validation, normalization, pricing, and activation;
+- `Inventory/InventoryItem.cs` for stock balances, reorder thresholds, versions, and audit movements;
+- `Inventory/StockBatch.cs` for traceability, expiry, receipt, consumption, limits, and overflow.
+
+Restore the pinned local tool and run the quality gate:
+
+```powershell
+dotnet tool restore
+dotnet test tests/Medzo.CatalogueInventory.UnitTests/Medzo.CatalogueInventory.UnitTests.csproj --configuration Release
+Push-Location tests/Medzo.CatalogueInventory.UnitTests
+dotnet stryker --skip-version-check
+Pop-Location
+```
+
+Stryker generates timestamped HTML, JSON, and Markdown reports beneath
+`tests/Medzo.CatalogueInventory.UnitTests/StrykerOutput/<timestamp>/reports/`. These generated
+directories are ignored by Git.
+
+### Verified results
+
+| Metric | Baseline | Strengthened suite |
+| --- | ---: | ---: |
+| Unit tests | 10 | 47 |
+| Scored mutants | 90 | 90 |
+| Killed | 40 | 89 |
+| Survived | 16 | 1 |
+| No coverage | 34 | 0 |
+| Timed out | 0 | 0 |
+| Mutation score | 44.44% | **98.89%** |
+
+`Medicine` and `InventoryItem` achieved 100%. The remaining `StockBatch` survivor removes the
+checked overflow operation for `RemainingQuantity`. It is equivalent under the aggregate's public
+invariants: remaining stock cannot exceed initial stock, and initial-stock overflow is checked
+first. The survivor is documented rather than hidden or excluded.
+
+### Automated quality gate
+
+`.github/workflows/catalogue-mutation-testing.yml` runs on relevant pushes, pull requests into
+`main`, and manual dispatch. It restores the pinned tools, runs all domain unit tests, enforces the
+80% mutation threshold, and uploads the HTML, JSON, and Markdown reports for 14 days. Missing
+report files fail the artifact step.
+
+### Two-minute live demo
+
+1. Run the unit-test command and show all 47 tests passing.
+2. Run `dotnet stryker --skip-version-check` from `tests/Medzo.CatalogueInventory.UnitTests`.
+3. Explain killed, survived, no-coverage, and mutation-score values in the result table.
+4. Open the newest `mutation-report.html` and inspect the documented survivor.
+5. Contrast the 44.44% baseline with 98.89% to show how mutation feedback improved the suite.
+
 ## CI/CD deployment
 
 The workflow tests the `dev` branch, publishes an immutable GHCR image, and
